@@ -1,0 +1,17 @@
+# 阿里云百炼（DashScope）官方 SDK：用于 ASR(Paraformer) / LLM(Qwen) / TTS(CosyVoice)
+dashscope>=1.20.0
+
+# WebSocket 服务端（设备语音通道）
+websockets>=12.0
+
+# HTTP 服务端（OTA 配置下发接口）
+aiohttp>=3.9.0
+
+# Opus 编解码（设备上下行音频都是 Opus）
+# 注意：opuslib 依赖系统的 libopus 动态库
+#   Ubuntu/Debian: sudo apt-get install -y libopus0
+#   macOS:         brew install opus
+opuslib>=3.0.1
+
+# PCM 音频数据处理
+numpy>=1.24.0
