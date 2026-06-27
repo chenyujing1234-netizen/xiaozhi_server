@@ -29,6 +29,7 @@ from typing import Optional
 from config import config
 from .opus_codec import OpusDecoder, OpusEncoder
 from .text_utils import SentenceSplitter
+from .audio_utils import is_speech
 from .providers import asr as asr_provider
 from .providers import llm as llm_provider
 from .providers import tts as tts_provider
@@ -72,6 +73,12 @@ class Session:
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._audio_task: Optional[asyncio.Task] = None
 
+        # 静音超时：追踪最后一次有效语音的时间
+        self._last_speech_time: float = 0.0
+        self._consecutive_speech_frames: int = 0
+        self._silence_watchdog: Optional[asyncio.Task] = None
+        self._turn_lock = asyncio.Lock()
+
         # 录音保存（可选）
         self._save_pcm = bytearray() if config.SAVE_AUDIO else None
 
@@ -109,22 +116,79 @@ class Session:
             pass
 
     async def _audio_consumer(self):
-        """顺序消费上行音频：解码 -> 喂 ASR。"""
+        """顺序消费上行音频：VAD 门控 -> 仅有效语音送 ASR。"""
         while True:
             data = await self._audio_queue.get()
-            if data is None:  # 停止信号
+            if data is None:
                 break
-            if self._responding or self._asr is None:
+            if self._responding or not self._listening or self._asr is None:
                 continue
+
             pcm = self.decoder.decode(data)
             if not pcm:
                 continue
+
+            if is_speech(pcm, config.SPEECH_RMS_THRESHOLD):
+                self._consecutive_speech_frames += 1
+            else:
+                self._consecutive_speech_frames = 0
+
+            if self._consecutive_speech_frames < config.SPEECH_FRAMES_REQUIRED:
+                continue
+
+            self._last_speech_time = time.time()
             if self._save_pcm is not None:
                 self._save_pcm.extend(pcm)
             try:
                 await self.loop.run_in_executor(None, self._asr.send, pcm)
             except Exception as e:  # noqa: BLE001
                 logger.debug("喂 ASR 失败: %s", e)
+
+    async def _silence_watchdog_loop(self):
+        """独立定时检查静音超时，不依赖“静音帧”触发。"""
+        try:
+            while self._listening and self._asr is not None:
+                await asyncio.sleep(1.0)
+                if not self._listening or self._responding or self._asr is None:
+                    break
+                elapsed = time.time() - self._last_speech_time
+                if elapsed >= config.SILENCE_TIMEOUT_SEC:
+                    await self._on_silence_timeout()
+                    break
+        except asyncio.CancelledError:
+            pass
+
+    async def _on_silence_timeout(self):
+        """静音超时：仅在没有待处理识别/回应时关闭通道。"""
+        async with self._turn_lock:
+            if self._responding or not self._listening:
+                return
+            if time.time() - self._last_speech_time < config.SILENCE_TIMEOUT_SEC:
+                return
+
+            self._stop_silence_watchdog()
+            self._stop_asr()
+            self._stop_audio_consumer()
+
+            # stop() 或延迟的 sentence_end 可能触发 on_final，稍等再决定是否 goodbye
+            await asyncio.sleep(0.5)
+            if self._responding:
+                logger.info(
+                    "[%s] 静音超时期间收到识别结果，取消 goodbye，继续回应",
+                    self.session_id,
+                )
+                return
+
+            logger.info(
+                "[%s] 静音超时 %.0fs，关闭 ASR 并通知设备退出聆听",
+                self.session_id,
+                config.SILENCE_TIMEOUT_SEC,
+            )
+            self._listening = False
+            try:
+                await self._send_json({"type": "goodbye"})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("发送 goodbye 失败: %s", e)
 
     # ---------------- 各类控制消息 ----------------
 
@@ -158,8 +222,13 @@ class Session:
         self._listening = True
         self._responding = False
         self._cancel = False
+        self._last_speech_time = time.time()
+        self._consecutive_speech_frames = 0
         if self._save_pcm is not None:
             self._save_pcm = bytearray()
+
+        def on_partial(text: str):
+            self._last_speech_time = time.time()
 
         def on_final(text: str):
             asyncio.run_coroutine_threadsafe(self._on_user_final(text), self.loop)
@@ -169,17 +238,36 @@ class Session:
                 model=config.ASR_MODEL,
                 sample_rate=config.UPLINK_SAMPLE_RATE,
                 on_final=on_final,
+                on_partial=on_partial,
             )
             await self.loop.run_in_executor(None, self._asr.start)
             self._audio_task = asyncio.create_task(self._audio_consumer())
-            logger.info("[%s] 开始监听，ASR 已启动", self.session_id)
+            self._start_silence_watchdog()
+            logger.info(
+                "[%s] 开始监听，ASR 已启动（静音超时=%ss，能量阈值=%s，连续帧=%s）",
+                self.session_id,
+                config.SILENCE_TIMEOUT_SEC,
+                config.SPEECH_RMS_THRESHOLD,
+                config.SPEECH_FRAMES_REQUIRED,
+            )
         except Exception as e:  # noqa: BLE001
             logger.error("启动 ASR 失败: %s", e)
             self._asr = None
 
     async def _stop_listening(self):
         self._listening = False
+        self._stop_silence_watchdog()
         self._stop_asr()  # 停止 ASR 会触发最后一次识别结果（通过回调）
+
+    def _start_silence_watchdog(self):
+        self._stop_silence_watchdog()
+        self._silence_watchdog = asyncio.create_task(self._silence_watchdog_loop())
+
+    def _stop_silence_watchdog(self):
+        task = self._silence_watchdog
+        if task is not None and not task.done():
+            task.cancel()
+        self._silence_watchdog = None
 
     def _stop_asr(self):
         if self._asr is not None:
@@ -203,12 +291,15 @@ class Session:
 
     async def _on_user_final(self, text: str):
         text = (text or "").strip()
-        if not text or self._responding:
-            return
-        self._responding = True
-        self._listening = False
-        self._stop_asr()
-        self._maybe_save_audio(text)
+        async with self._turn_lock:
+            if not text or self._responding:
+                return
+            self._responding = True
+            self._listening = False
+            self._stop_silence_watchdog()
+            self._stop_asr()
+            self._stop_audio_consumer()
+            self._maybe_save_audio(text)
 
         await self._send_json({"type": "stt", "text": text})
 
@@ -312,6 +403,7 @@ class Session:
 
     async def _close_turn(self):
         await self._cancel_response()
+        self._stop_silence_watchdog()
         self._stop_asr()
         self._stop_audio_consumer()
         self._listening = False

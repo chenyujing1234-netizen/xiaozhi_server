@@ -84,6 +84,14 @@ class Config:
     # 下行音频发送节奏（秒/帧）。略快于实时(0.06)，让设备播放缓冲略有富余但不溢出。
     DOWNLINK_PACING_SEC = float(os.getenv("DOWNLINK_PACING_SEC", "0.045"))
 
+    # ---- 静音超时（节省 ASR 流式识别费用）----
+    # 连续多少秒没有有效语音 → 关闭 ASR 并向设备发 goodbye（退出“聆听中”）
+    SILENCE_TIMEOUT_SEC = float(os.getenv("SILENCE_TIMEOUT_SEC", "15"))
+    # PCM 能量阈值（16-bit RMS）。低于此值视为静音/噪声，不送入 ASR
+    SPEECH_RMS_THRESHOLD = float(os.getenv("SPEECH_RMS_THRESHOLD", "700"))
+    # 连续多少帧超过阈值才视为有效语音（过滤环境底噪尖峰，每帧 60ms）
+    SPEECH_FRAMES_REQUIRED = int(os.getenv("SPEECH_FRAMES_REQUIRED", "3"))
+
     # ---- 日志 ----
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     # 是否把每段对话的音频保存到 saved_audio/ 目录（上行解码后的 wav）
