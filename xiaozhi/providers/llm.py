@@ -14,6 +14,7 @@ logger = logging.getLogger("llm")
 
 def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
     """流式对话。逐段 yield 增量文本（incremental）。"""
+    logger.info("[pipeline] LLM 请求开始 model=%s messages=%d", model, len(messages))
     try:
         responses = Generation.call(
             model=model,
@@ -23,14 +24,15 @@ def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
             incremental_output=True,
         )
     except Exception as e:  # noqa: BLE001
-        logger.error("调用 LLM 失败: %s", e)
+        logger.error("[pipeline] LLM 调用失败: %s", e)
         yield "抱歉，我现在有点问题，待会再聊吧。"
         return
 
+    total_chars = 0
     for response in responses:
         if response.status_code != HTTPStatus.OK:
             logger.error(
-                "LLM 返回错误 request_id=%s code=%s msg=%s",
+                "[pipeline] LLM 返回错误 request_id=%s code=%s msg=%s",
                 getattr(response, "request_id", "?"),
                 getattr(response, "code", "?"),
                 getattr(response, "message", "?"),
@@ -41,4 +43,7 @@ def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
         except Exception:  # noqa: BLE001
             continue
         if delta:
+            total_chars += len(delta)
             yield delta
+
+    logger.info("[pipeline] LLM 流式输出结束，共 %d 字", total_chars)

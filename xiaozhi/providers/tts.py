@@ -18,6 +18,7 @@ def synthesize(text: str, model: str, voice: str) -> bytes:
     if not text:
         return b""
     try:
+        logger.info("[pipeline] TTS 请求开始 model=%s voice=%s text=%s", model, voice, text)
         synthesizer = SpeechSynthesizer(
             model=model,
             voice=voice,
@@ -25,9 +26,10 @@ def synthesize(text: str, model: str, voice: str) -> bytes:
         )
         audio = synthesizer.call(text)
         if audio is None:
-            logger.warning("TTS 返回空音频: %s", text)
+            logger.warning("[pipeline] TTS 返回空音频: %s", text)
             return b""
+        logger.info("[pipeline] TTS 合成完成 pcm=%d bytes: %s", len(audio), text)
         return audio
     except Exception as e:  # noqa: BLE001
-        logger.error("TTS 合成失败: %s (text=%s)", e, text)
+        logger.error("[pipeline] TTS 合成失败: %s (text=%s)", e, text)
         return b""

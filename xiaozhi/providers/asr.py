@@ -21,10 +21,10 @@ class _Callback(RecognitionCallback):
         self._on_error = on_error
 
     def on_open(self) -> None:
-        logger.debug("ASR 连接已打开")
+        logger.info("ASR 流式连接已建立")
 
     def on_close(self) -> None:
-        logger.debug("ASR 连接已关闭")
+        logger.info("ASR 流式连接已关闭")
 
     def on_error(self, result) -> None:
         # 注意：不要对 result 直接 str()，DashScope 的 RecognitionResult.__str__
@@ -49,7 +49,7 @@ class _Callback(RecognitionCallback):
         if not text:
             return
         if RecognitionResult.is_sentence_end(sentence):
-            logger.info("ASR 一句结束: %s", text)
+            logger.info("[pipeline] ASR 一句结束: %s", text)
             if self._on_final:
                 self._on_final(text)
         else:
@@ -71,7 +71,7 @@ class AsrStream:
             model=model,
             format="pcm",
             sample_rate=sample_rate,
-            semantic_punctuation_enabled=True,
+            semantic_punctuation_enabled=False,
             callback=_Callback(on_partial, on_final, on_error),
         )
 

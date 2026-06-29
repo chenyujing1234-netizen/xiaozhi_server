@@ -63,7 +63,7 @@ class MqttUdpTransport:
         self.device_addr = None  # 从上行 UDP 包学习
         self._tx_seq = 0
         self._tx_timestamp = 0
-        self.downlink_topic = "server"
+        self.downlink_topic = config.MQTT_PUBLISH_TOPIC
 
     # ---- 发送 ----
 

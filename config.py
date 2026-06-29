@@ -91,9 +91,18 @@ class Config:
     SPEECH_RMS_THRESHOLD = float(os.getenv("SPEECH_RMS_THRESHOLD", "700"))
     # 连续多少帧超过阈值才视为有效语音（过滤环境底噪尖峰，每帧 60ms）
     SPEECH_FRAMES_REQUIRED = int(os.getenv("SPEECH_FRAMES_REQUIRED", "3"))
+    # 用户说完后，VAD 连续静音多少秒即认为一句话结束并送 LLM（不等待云端语义断句）
+    UTTERANCE_END_SILENCE_SEC = float(os.getenv("UTTERANCE_END_SILENCE_SEC", "2"))
+    # 连续多少次「VAD 有语音但 ASR 无文本」→ 视为环境噪声，下发 goodbye 退出聆听
+    EMPTY_UTTERANCE_LIMIT = int(os.getenv("EMPTY_UTTERANCE_LIMIT", "3"))
+
+    # 流式 LLM → TTS：累计多少字且遇到逗号/句号等软标点时，先合成并下发首段音频
+    TTS_SPLIT_MIN_CHARS = int(os.getenv("TTS_SPLIT_MIN_CHARS", "10"))
 
     # ---- 日志 ----
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+    # 是否在日志中打印上行音频 RMS 能量（约每秒 1 条，用于调 VAD 阈值）
+    LOG_AUDIO_RMS = os.getenv("LOG_AUDIO_RMS", "0") == "1"
     # 是否把每段对话的音频保存到 saved_audio/ 目录（上行解码后的 wav）
     SAVE_AUDIO = os.getenv("SAVE_AUDIO", "0") == "1"
     SAVE_AUDIO_DIR = os.getenv("SAVE_AUDIO_DIR", "saved_audio")
