@@ -37,6 +37,9 @@ from .providers import tts as tts_provider
 logger = logging.getLogger("session")
 
 MAX_HISTORY_TURNS = 10  # 保留最近多少轮对话作为上下文
+ERROR_SPEECH = "抱歉，服务端出现了异常，连接已断开，请稍后再试。"
+ASR_ERROR_SPEECH = "抱歉，语音识别出了问题，连接已断开，请稍后再试。"
+MAX_ERROR_DETAIL_LEN = 200
 
 
 class Session:
@@ -90,6 +93,7 @@ class Session:
 
         # 录音保存（可选）
         self._save_pcm = bytearray() if config.SAVE_AUDIO else None
+        self._error_notified = False
 
     # ---------------- 消息分发 ----------------
 
@@ -338,6 +342,46 @@ class Session:
         logger.info("收到 abort, reason=%s", msg.get("reason"))
         await self._cancel_response()
 
+    def _make_asr_callbacks(self):
+        def on_partial(text: str):
+            self._last_asr_partial = text
+            logger.info("[pipeline][%s] ② ASR 识别中: %s", self.session_id, text)
+
+        def on_final(text: str):
+            asyncio.run_coroutine_threadsafe(self._on_user_final(text), self.loop)
+
+        def on_error(msg: str):
+            asyncio.run_coroutine_threadsafe(self._handle_asr_error(msg), self.loop)
+
+        return on_partial, on_final, on_error
+
+    async def _handle_asr_error(self, detail: str):
+        async with self._turn_lock:
+            if self._error_notified or self._responding:
+                return
+            self._error_notified = True
+            self._listening = False
+            self._utterance_finalizing = False
+        self._stop_silence_watchdog()
+        self._stop_asr()
+        self._stop_audio_consumer()
+        await self._notify_error(ASR_ERROR_SPEECH, detail=f"ASR: {detail}")
+
+    async def _handle_pipeline_error(self, detail: str, tts_started: bool = False):
+        async with self._turn_lock:
+            if self._error_notified:
+                return
+            self._error_notified = True
+        self._cancel = True
+        if self.history and self.history[-1].get("role") == "user":
+            self.history.pop()
+        await self._notify_error(
+            ERROR_SPEECH,
+            detail=detail,
+            disconnect=True,
+            tts_started=tts_started,
+        )
+
     # ---------------- 监听 / 识别 ----------------
 
     async def _start_listening(self):
@@ -359,15 +403,11 @@ class Session:
         self._last_asr_partial = ""
         self._utterance_finalizing = False
         self._empty_utterance_streak = 0
+        self._error_notified = False
         if self._save_pcm is not None:
             self._save_pcm = bytearray()
 
-        def on_partial(text: str):
-            self._last_asr_partial = text
-            logger.info("[pipeline][%s] ② ASR 识别中: %s", self.session_id, text)
-
-        def on_final(text: str):
-            asyncio.run_coroutine_threadsafe(self._on_user_final(text), self.loop)
+        on_partial, on_final, on_error = self._make_asr_callbacks()
 
         try:
             self._asr = asr_provider.AsrStream(
@@ -375,6 +415,7 @@ class Session:
                 sample_rate=config.UPLINK_SAMPLE_RATE,
                 on_final=on_final,
                 on_partial=on_partial,
+                on_error=on_error,
             )
             await self.loop.run_in_executor(None, self._asr.start)
             self._audio_task = asyncio.create_task(self._audio_consumer())
@@ -394,18 +435,14 @@ class Session:
         except Exception as e:  # noqa: BLE001
             logger.error("启动 ASR 失败: %s", e)
             self._asr = None
+            await self._handle_asr_error(f"启动失败: {e}")
 
     async def _reopen_asr(self):
         """句末判定后无文本时，重新建立 ASR 连接（仍在同一次 listen 内）。"""
         if not self._listening or self._responding:
             return
 
-        def on_partial(text: str):
-            self._last_asr_partial = text
-            logger.info("[pipeline][%s] ② ASR 识别中: %s", self.session_id, text)
-
-        def on_final(text: str):
-            asyncio.run_coroutine_threadsafe(self._on_user_final(text), self.loop)
+        on_partial, on_final, on_error = self._make_asr_callbacks()
 
         try:
             self._asr = asr_provider.AsrStream(
@@ -413,6 +450,7 @@ class Session:
                 sample_rate=config.UPLINK_SAMPLE_RATE,
                 on_final=on_final,
                 on_partial=on_partial,
+                on_error=on_error,
             )
             await self.loop.run_in_executor(None, self._asr.start)
             if self._audio_task is None or self._audio_task.done():
@@ -422,6 +460,7 @@ class Session:
         except Exception as e:  # noqa: BLE001
             logger.error("重新开启 ASR 失败: %s", e)
             self._asr = None
+            await self._handle_asr_error(f"重新连接失败: {e}")
 
     async def _stop_listening(self):
         self._listening = False
@@ -461,7 +500,7 @@ class Session:
     async def _on_user_final(self, text: str):
         text = (text or "").strip()
         async with self._turn_lock:
-            if not text or self._responding:
+            if not text or self._responding or self._error_notified:
                 return
             if self._silence_closing:
                 logger.info(
@@ -515,11 +554,12 @@ class Session:
             llm_started = False
             llm_queue: asyncio.Queue = asyncio.Queue()
             tts_text_queue: asyncio.Queue = asyncio.Queue()
+            llm_error: list = [None]
 
             async def _llm_reader():
                 nonlocal full_reply, llm_started
                 self.loop.run_in_executor(
-                    None, self._run_llm, list(self.history), llm_queue
+                    None, self._run_llm, list(self.history), llm_queue, llm_error
                 )
                 try:
                     while True:
@@ -547,6 +587,13 @@ class Session:
                                 len(sentence),
                                 sentence,
                             )
+                    if self._cancel:
+                        return
+                    if llm_error[0]:
+                        await self._handle_pipeline_error(
+                            f"LLM 错误: {llm_error[0]}", tts_started=True
+                        )
+                        return
                     if not self._cancel:
                         last = splitter.flush()
                         if last:
@@ -557,6 +604,10 @@ class Session:
                                 time.time() - t0,
                                 last,
                             )
+                    if not llm_started:
+                        await self._handle_pipeline_error(
+                            "LLM 无有效输出", tts_started=True
+                        )
                 finally:
                     await tts_text_queue.put(None)
 
@@ -590,7 +641,7 @@ class Session:
 
             await asyncio.gather(_llm_reader(), _tts_player())
 
-            if full_reply.strip():
+            if full_reply.strip() and not self._error_notified:
                 self.history.append({"role": "assistant", "content": full_reply.strip()})
                 logger.info(
                     "[pipeline][%s] ⑥ LLM 完成 (%.1fs)，回复: %s",
@@ -604,6 +655,7 @@ class Session:
             raise
         except Exception as e:  # noqa: BLE001
             logger.error("[pipeline][%s] 回应流程异常: %s", self.session_id, e)
+            await self._handle_pipeline_error(str(e), tts_started=True)
         finally:
             try:
                 await self._send_json({"type": "tts", "state": "stop"})
@@ -616,11 +668,15 @@ class Session:
                 time.time() - t0,
             )
 
-    def _run_llm(self, messages, queue: asyncio.Queue):
+    def _run_llm(self, messages, queue: asyncio.Queue, llm_error: list):
         try:
             for delta in llm_provider.stream_chat(messages, model=config.LLM_MODEL):
                 self.loop.call_soon_threadsafe(queue.put_nowait, delta)
+        except llm_provider.LlmError as e:
+            llm_error[0] = str(e)
+            logger.error("LLM 错误: %s", e)
         except Exception as e:  # noqa: BLE001
+            llm_error[0] = str(e)
             logger.error("LLM 线程异常: %s", e)
         finally:
             self.loop.call_soon_threadsafe(queue.put_nowait, None)
@@ -702,6 +758,70 @@ class Session:
         self._listening = False
 
     # ---------------- 工具 ----------------
+
+    def _truncate_detail(self, detail: str) -> str:
+        detail = (detail or "").strip()
+        if len(detail) <= MAX_ERROR_DETAIL_LEN:
+            return detail
+        return detail[: MAX_ERROR_DETAIL_LEN - 3] + "..."
+
+    async def _notify_error(
+        self,
+        speech_text: str,
+        detail: str = "",
+        disconnect: bool = True,
+        tts_started: bool = False,
+    ):
+        """TTS 语音播报 + 屏幕 alert + 可选 goodbye 断开。"""
+        detail = self._truncate_detail(detail)
+        logger.error(
+            "[%s] 通知设备错误 speech=%r detail=%r disconnect=%s",
+            self.session_id,
+            speech_text,
+            detail,
+            disconnect,
+        )
+
+        self._stop_silence_watchdog()
+        self._stop_asr()
+        self._stop_audio_consumer()
+        self._listening = False
+        self._utterance_finalizing = False
+
+        try:
+            await self._send_json({
+                "type": "alert",
+                "status": "服务端异常",
+                "message": detail or speech_text,
+                "emotion": "sad",
+            })
+        except Exception as e:  # noqa: BLE001
+            logger.warning("发送 alert 失败: %s", e)
+
+        saved_cancel = self._cancel
+        self._cancel = False
+        try:
+            if not tts_started:
+                await self._send_json({"type": "tts", "state": "start"})
+                await asyncio.sleep(0.2)
+            await self._speak_sentence(speech_text)
+            if not tts_started:
+                await self._send_json({"type": "tts", "state": "stop"})
+        except Exception as e:  # noqa: BLE001
+            logger.warning("错误语音提示失败: %s", e)
+            if not tts_started:
+                try:
+                    await self._send_json({"type": "tts", "state": "stop"})
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            self._cancel = saved_cancel
+
+        if disconnect:
+            try:
+                await self._send_json({"type": "goodbye"})
+            except Exception as e:  # noqa: BLE001
+                logger.warning("发送 goodbye 失败: %s", e)
 
     async def _send_json(self, obj: dict):
         obj.setdefault("session_id", self.session_id)

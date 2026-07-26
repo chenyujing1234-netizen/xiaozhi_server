@@ -1,0 +1,69 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>SpeakPal 英语练习 · Web 测试</title>
+  <link rel="stylesheet" href="/static/english-test.css">
+</head>
+<body>
+  <div class="page">
+    <header class="header">
+      <a class="back" href="/">← 返回语伴 LinkPal</a>
+      <h1>口语伴 SpeakPal</h1>
+      <p class="subtitle">Web 端英语练习测试 · 口语纠错：中文说明 + 正确英文再读一遍</p>
+    </header>
+
+    <section class="panel status-panel">
+      <div class="status-row">
+        <span class="label">连接</span>
+        <span id="conn-dot" class="dot dot-off"></span>
+        <span id="conn-text">未连接</span>
+      </div>
+      <div class="status-row">
+        <span class="label">会话</span>
+        <span id="session-text">—</span>
+      </div>
+      <div class="status-row">
+        <span class="label">状态</span>
+        <span id="state-text">等待连接</span>
+      </div>
+    </section>
+
+    <section class="panel chat-panel">
+      <div class="bubble user-bubble hidden" id="user-bubble">
+        <span class="bubble-tag">你说</span>
+        <p id="user-text"></p>
+      </div>
+      <div class="bubble tutor-bubble hidden" id="tutor-bubble">
+        <span class="bubble-tag">导师</span>
+        <p id="tutor-text"></p>
+      </div>
+      <div class="bubble correction-bubble hidden" id="correction-bubble">
+        <span class="bubble-tag">本轮纠错要点</span>
+        <p id="correction-text"></p>
+      </div>
+      <p id="hint-text" class="hint">连接后按住说话。导师会在发现发音/用词/时态/结构问题时，用中文说明并再读一遍正确英文。也可直接说「严格纠正」「少纠正一点」来调整风格。</p>
+    </section>
+
+    <section class="panel controls">
+      <button id="btn-connect" class="btn btn-secondary">连接服务器</button>
+      <button id="btn-talk" class="btn btn-primary" disabled>按住说话</button>
+      <button id="btn-stop" class="btn btn-danger hidden" disabled>停止播放</button>
+    </section>
+
+    <section class="panel log-panel">
+      <div class="log-head">日志</div>
+      <pre id="log-box"></pre>
+    </section>
+
+    <footer class="footer">
+      <p>WebSocket：<code id="ws-url">—</code></p>
+      <p>协议：hello → listen start → PCM 16k 上行 → PCM 24k 下行播放</p>
+      <p class="warn">麦克风需在「安全上下文」下使用（HTTPS 或 localhost）。若远程 HTTP 无法录音，请用 SSH 隧道访问 <code>localhost:8002/english-test/</code>，或为站点配置 HTTPS。</p>
+    </footer>
+  </div>
+
+  <script src="/static/english-test.js"></script>
+</body>
+</html>

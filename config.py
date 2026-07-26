@@ -111,5 +111,63 @@ class Config:
     def ws_url_for_device(self) -> str:
         return f"ws://{self.PUBLIC_HOST}:{self.WS_PORT}{self.WS_PATH}"
 
+    # ---- 英语口语练习智能体（独立 MQTT+UDP 端口，不影响默认小智通道）----
+    ENGLISH_ENABLED = os.getenv("ENGLISH_ENABLED", "1") == "1"
+    ENGLISH_MQTT_PORT = int(os.getenv("ENGLISH_MQTT_PORT", "1884"))
+    ENGLISH_UDP_PORT = int(os.getenv("ENGLISH_UDP_PORT", "8003"))
+    ENGLISH_WS_PATH = os.getenv("ENGLISH_WS_PATH", "/xiaozhi/english/v1/")
+
+    # 语音转语音多模态模型（百炼 S2S，音频进 → 音频出，适合口语纠正）
+    ENGLISH_OMNI_MODEL = os.getenv("ENGLISH_OMNI_MODEL", "qwen3.5-omni-plus-realtime")
+    ENGLISH_OMNI_VOICE = os.getenv("ENGLISH_OMNI_VOICE", "Ethan")
+    ENGLISH_OMNI_INSTRUCTIONS = os.getenv(
+        "ENGLISH_OMNI_INSTRUCTIONS",
+        "You are SpeakPal, a patient English speaking tutor for Chinese learners. "
+        "You hear the student's spoken English directly. "
+        "Follow the student profile section for language mix, reply length, and correction strictness. "
+        "Default correction protocol when the profile does not say otherwise: "
+        "1) Briefly acknowledge what they meant. "
+        "2) If there is a clear issue in pronunciation, word choice, tense, or sentence structure, "
+        "explain the issue in simple Chinese. "
+        "3) Then give the correct English sentence and read it clearly once so they can repeat. "
+        "Correct at most one or two important issues per turn; ignore tiny slips if meaning is clear. "
+        "If the profile asks for gentle or fewer corrections, praise first and correct only blocking errors. "
+        "If the profile asks for strict correction, be more thorough but still keep a warm tone. "
+        "If the profile asks for English-only, explain corrections in simple English instead of Chinese. "
+        "When the student asks for a story or detailed help, finish the content; do not stop after an intro. "
+        "Keep replies natural for voice. Do not use markdown, bullet points, or emoji.",
+    )
+    # Omni Realtime WebSocket（国内默认 endpoint）
+    ENGLISH_OMNI_WS_URL = os.getenv(
+        "ENGLISH_OMNI_WS_URL",
+        "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
+    )
+    # 英语用户画像（自然语言段落，按 device_id 存 MySQL）
+    ENGLISH_PROFILE_AUTO_UPDATE = os.getenv("ENGLISH_PROFILE_AUTO_UPDATE", "1") == "1"
+    ENGLISH_PROFILE_UPDATE_COOLDOWN_SEC = float(
+        os.getenv("ENGLISH_PROFILE_UPDATE_COOLDOWN_SEC", "20")
+    )
+    # 每 N 轮对话沉淀一次画像（显式偏好会立刻更新）
+    ENGLISH_PROFILE_REFINE_EVERY_TURNS = int(
+        os.getenv("ENGLISH_PROFILE_REFINE_EVERY_TURNS", "3")
+    )
+    ENGLISH_PROFILE_LLM_MODEL = os.getenv("ENGLISH_PROFILE_LLM_MODEL", LLM_MODEL)
+    # 英语对话历史：重连时注入 Omni instructions 作为上下文
+    ENGLISH_HISTORY_ENABLED = os.getenv("ENGLISH_HISTORY_ENABLED", "1") == "1"
+    ENGLISH_HISTORY_MAX_MESSAGES = int(os.getenv("ENGLISH_HISTORY_MAX_MESSAGES", "20"))
+    ENGLISH_HISTORY_MAX_CHARS = int(os.getenv("ENGLISH_HISTORY_MAX_CHARS", "2500"))
+
+    # ---- MySQL（英语用户画像等共享数据）----
+    MYSQL_HOST = os.getenv("MYSQL_HOST", "114.55.254.123")
+    MYSQL_PORT = int(os.getenv("MYSQL_PORT", "3306"))
+    MYSQL_USER = os.getenv("MYSQL_USER", "chenyujing")
+    MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "Centerm1@")
+    MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "xiaozhi_server")
+    MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")
+
+    @property
+    def english_ws_url_for_device(self) -> str:
+        return f"ws://{self.PUBLIC_HOST}:{self.WS_PORT}{self.ENGLISH_WS_PATH}"
+
 
 config = Config()

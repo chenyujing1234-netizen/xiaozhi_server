@@ -127,13 +127,15 @@ class MqttConnection:
 
 
 class MqttBroker:
-    def __init__(self, loop, udp_server):
+    def __init__(self, loop, udp_server, session_class=Session, name: str = "default"):
         self.loop = loop
         self.udp_server = udp_server
+        self.session_class = session_class
+        self.name = name
 
     async def start(self, host: str, port: int):
         server = await asyncio.start_server(self._handle_client, host, port)
-        logger.info("MQTT 网关监听 %s:%d", host, port)
+        logger.info("MQTT 网关[%s] 监听 %s:%d", self.name, host, port)
         return server
 
     async def _handle_client(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter):
@@ -154,9 +156,13 @@ class MqttBroker:
                     client_id = _parse_connect_client_id(body)
                     await conn.send_connack()
                     transport = MqttUdpTransport(conn, self.udp_server, self.loop)
-                    session = Session(transport, self.loop, device_id=client_id, client_id=client_id)
-                    logger.info("设备 MQTT 已连接 client_id=%s from=%s session=%s",
-                                client_id, peer, session.session_id)
+                    session = self.session_class(
+                        transport, self.loop, device_id=client_id, client_id=client_id
+                    )
+                    logger.info(
+                        "设备 MQTT[%s] 已连接 client_id=%s from=%s session=%s",
+                        self.name, client_id, peer, session.session_id,
+                    )
                 elif ptype == PUBLISH:
                     topic, payload, _qos = _parse_publish(first, body)
                     if session is not None:

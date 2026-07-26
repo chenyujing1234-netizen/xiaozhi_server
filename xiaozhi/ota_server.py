@@ -1,16 +1,18 @@
-"""OTA 配置下发接口（HTTP）。
+"""OTA 配置下发接口（HTTP）+ LinkPal 宣传站静态页面。
 
 设备开机会向 OTA URL 发请求（携带系统信息 JSON），服务端返回一段 JSON 配置。
 我们在这里：
   - 按 config.TRANSPORT 下发 mqtt（默认，设备出厂方式）或 websocket 配置
   - 回一个不高于当前固件的版本号，避免触发误升级
   - 顺便对齐一下设备时钟
+  - 根路径 / 提供语伴 LinkPal 宣传网站（静态 HTML）
 
 要让设备连到本服务端，需要把设备的 OTA URL 指向这里（见 README）。
 """
 import json
 import logging
 import time
+from pathlib import Path
 
 from aiohttp import web
 
@@ -18,8 +20,10 @@ from config import config
 
 logger = logging.getLogger("ota")
 
+WEB_DIR = Path(__file__).resolve().parent.parent / "web"
 
-def _build_response(body_text: str, device_id: str) -> dict:
+
+def _build_response(body_text: str, device_id: str, *, english: bool = False) -> dict:
     # 尝试从设备上报的系统信息里取当前固件版本，回相同版本以避免升级
     current_version = "0.0.0"
     try:
@@ -45,16 +49,18 @@ def _build_response(body_text: str, device_id: str) -> dict:
 
     if config.TRANSPORT == "websocket":
         # 只给 websocket，不给 mqtt => 设备走 WebSocket
+        ws_url = config.english_ws_url_for_device if english else config.ws_url_for_device
         resp["websocket"] = {
-            "url": config.ws_url_for_device,
+            "url": ws_url,
             "version": 1,             # 二进制协议版本1：裸 Opus 帧
             "token": "xiaozhi-test",
         }
     else:
         # 默认：给 mqtt（设备出厂默认走 MQTT+UDP）。endpoint 用 :1883 => 明文 TCP（非 TLS）
-        client_id = _make_client_id(device_id)
+        client_id = _make_client_id(device_id, prefix="xz-en" if english else "xz")
+        mqtt_port = config.ENGLISH_MQTT_PORT if english else config.MQTT_PORT
         resp["mqtt"] = {
-            "endpoint": f"{config.PUBLIC_HOST}:{config.MQTT_PORT}",
+            "endpoint": f"{config.PUBLIC_HOST}:{mqtt_port}",
             "client_id": client_id,
             "username": "xiaozhi",
             "password": "xiaozhi",
@@ -64,11 +70,31 @@ def _build_response(body_text: str, device_id: str) -> dict:
     return resp
 
 
-def _make_client_id(device_id: str) -> str:
+def _make_client_id(device_id: str, prefix: str = "xz") -> str:
     safe = "".join(c for c in (device_id or "") if c.isalnum())
     if not safe:
         safe = "device"
-    return f"xz-{safe}"
+    return f"{prefix}-{safe}"
+
+
+async def _handle_ota_english(request: web.Request) -> web.Response:
+    body_text = await request.text()
+    device_id = request.headers.get("Device-Id", "unknown")
+    client_id = request.headers.get("Client-Id", "unknown")
+    logger.info(
+        "OTA[english] 请求 device_id=%s client_id=%s body=%s",
+        device_id, client_id, body_text[:300],
+    )
+
+    resp = _build_response(body_text, device_id, english=True)
+    if "websocket" in resp:
+        logger.info("OTA[english] 下发 websocket.url=%s", resp["websocket"]["url"])
+    else:
+        logger.info(
+            "OTA[english] 下发 mqtt.endpoint=%s publish_topic=%s",
+            resp["mqtt"]["endpoint"], resp["mqtt"]["publish_topic"],
+        )
+    return web.json_response(resp)
 
 
 async def _handle_ota(request: web.Request) -> web.Response:
@@ -92,14 +118,31 @@ async def _handle_activate(request: web.Request) -> web.Response:
     return web.json_response({"status": "ok"})
 
 
+async def _handle_site_index(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "index.html")
+
+
+async def _handle_english_test(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "english-test.html")
+
+
 def build_app() -> web.Application:
     app = web.Application()
     # 设备的 OTA URL 形如 http://host:port/xiaozhi/ota/
     app.router.add_route("*", "/xiaozhi/ota/", _handle_ota)
     app.router.add_route("*", "/xiaozhi/ota", _handle_ota)
+    app.router.add_route("*", "/xiaozhi/ota/english/", _handle_ota_english)
+    app.router.add_route("*", "/xiaozhi/ota/english", _handle_ota_english)
     app.router.add_route("*", "/xiaozhi/ota/activate", _handle_activate)
-    # 兜底：根路径也返回配置，方便不同 OTA URL 写法
-    app.router.add_route("*", "/", _handle_ota)
+    # LinkPal 宣传站（静态资源 + 首页）
+    if WEB_DIR.is_dir():
+        app.router.add_get("/", _handle_site_index)
+        app.router.add_get("/english-test", _handle_english_test)
+        app.router.add_get("/english-test/", _handle_english_test)
+        app.router.add_static("/static", WEB_DIR / "static", show_index=False)
+    else:
+        logger.warning("宣传站目录不存在: %s，根路径仍走 OTA", WEB_DIR)
+        app.router.add_route("*", "/", _handle_ota)
     return app
 
 
@@ -110,5 +153,16 @@ async def start_ota_server():
     site = web.TCPSite(runner, config.OTA_HOST, config.OTA_PORT)
     await site.start()
     logger.info("OTA 服务监听 http://%s:%d/xiaozhi/ota/", config.OTA_HOST, config.OTA_PORT)
+    if WEB_DIR.is_dir():
+        logger.info("宣传站: http://%s:%d/", config.PUBLIC_HOST, config.OTA_PORT)
+        logger.info(
+            "英语 Web 测试: http://%s:%d/english-test/",
+            config.PUBLIC_HOST, config.OTA_PORT,
+        )
     logger.info("请把设备 OTA URL 设置为: http://%s:%d/xiaozhi/ota/", config.PUBLIC_HOST, config.OTA_PORT)
+    if config.ENGLISH_ENABLED:
+        logger.info(
+            "英语口语 OTA: http://%s:%d/xiaozhi/ota/english/",
+            config.PUBLIC_HOST, config.OTA_PORT,
+        )
     return runner

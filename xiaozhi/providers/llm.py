@@ -12,6 +12,10 @@ from http import HTTPStatus
 logger = logging.getLogger("llm")
 
 
+class LlmError(Exception):
+    """LLM 调用失败或无有效输出。"""
+
+
 def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
     """流式对话。逐段 yield 增量文本（incremental）。"""
     logger.info("[pipeline] LLM 请求开始 model=%s messages=%d", model, len(messages))
@@ -25,17 +29,18 @@ def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
         )
     except Exception as e:  # noqa: BLE001
         logger.error("[pipeline] LLM 调用失败: %s", e)
-        yield "抱歉，我现在有点问题，待会再聊吧。"
-        return
+        raise LlmError(str(e)) from e
 
     total_chars = 0
+    last_err = ""
     for response in responses:
         if response.status_code != HTTPStatus.OK:
+            last_err = str(getattr(response, "message", "") or "unknown")
             logger.error(
                 "[pipeline] LLM 返回错误 request_id=%s code=%s msg=%s",
                 getattr(response, "request_id", "?"),
                 getattr(response, "code", "?"),
-                getattr(response, "message", "?"),
+                last_err,
             )
             continue
         try:
@@ -45,5 +50,8 @@ def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
         if delta:
             total_chars += len(delta)
             yield delta
+
+    if total_chars == 0:
+        raise LlmError(last_err or "LLM 无有效输出")
 
     logger.info("[pipeline] LLM 流式输出结束，共 %d 字", total_chars)

@@ -7,11 +7,13 @@
 """
 import asyncio
 import logging
+from urllib.parse import parse_qs, urlparse
 
 import websockets
 
 from config import config
 from .session import Session
+from .english_session import EnglishSession
 from .transports import WebSocketTransport
 
 logger = logging.getLogger("ws")
@@ -34,18 +36,27 @@ async def _handler(websocket):
         path = getattr(websocket, "path", "")
         headers = getattr(websocket, "request_headers", {})
 
-    device_id = _get_header(headers, "Device-Id", "unknown")
-    client_id = _get_header(headers, "Client-Id", "unknown")
+    parsed = urlparse(path)
+    path_only = parsed.path
+    query = parse_qs(parsed.query)
+    # 浏览器 WebSocket 无法自定义 Header，允许 query 或默认 web 客户端 ID
+    device_id = _get_header(headers, "Device-Id", "") or query.get("device_id", ["web-browser"])[0]
+    client_id = _get_header(headers, "Client-Id", "") or query.get("client_id", ["web-test"])[0]
     proto_ver = _get_header(headers, "Protocol-Version", "?")
     peer = getattr(websocket, "remote_address", ("?", 0))
+
+    english = path_only.rstrip("/") == config.ENGLISH_WS_PATH.rstrip("/")
+    session_cls = EnglishSession if english else Session
+    tag = "english" if english else "default"
+
     logger.info(
-        "设备已连接 path=%s device_id=%s client_id=%s proto=%s from=%s",
-        path, device_id, client_id, proto_ver, peer,
+        "设备已连接[%s] path=%s device_id=%s client_id=%s proto=%s from=%s",
+        tag, path_only, device_id, client_id, proto_ver, peer,
     )
 
     loop = asyncio.get_running_loop()
     transport = WebSocketTransport(websocket)
-    session = Session(transport, loop, device_id=device_id, client_id=client_id)
+    session = session_cls(transport, loop, device_id=device_id, client_id=client_id)
 
     try:
         async for message in websocket:
@@ -64,7 +75,9 @@ async def _handler(websocket):
 
 async def start_ws_server():
     logger.info("WebSocket 服务监听 ws://%s:%d%s", config.WS_HOST, config.WS_PORT, config.WS_PATH)
-    logger.info("设备应连接（下发给设备的地址）: %s", config.ws_url_for_device)
+    logger.info("设备应连接（默认）: %s", config.ws_url_for_device)
+    if config.ENGLISH_ENABLED:
+        logger.info("设备应连接（英语）: %s", config.english_ws_url_for_device)
     server = await websockets.serve(
         _handler,
         config.WS_HOST,

@@ -29,10 +29,12 @@ class _UdpProtocol(asyncio.DatagramProtocol):
 class UdpServer:
     def __init__(self, loop: asyncio.AbstractEventLoop):
         self.loop = loop
+        self.port = 0
         self._routes = {}  # conn_id(int) -> MqttUdpTransport
         self._datagram_transport = None
 
     async def start(self, host: str, port: int):
+        self.port = port
         await self.loop.create_datagram_endpoint(
             lambda: _UdpProtocol(self),
             local_addr=(host, port),

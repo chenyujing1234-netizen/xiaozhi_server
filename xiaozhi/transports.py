@@ -109,7 +109,7 @@ class MqttUdpTransport:
             "audio_params": _audio_params(),
             "udp": {
                 "server": config.PUBLIC_HOST,
-                "port": config.UDP_PORT,
+                "port": self.udp.port,
                 "key": self.key.hex().upper(),
                 "nonce": self.nonce_template.hex().upper(),
             },

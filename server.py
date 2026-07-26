@@ -1,8 +1,10 @@
 """小智 ESP32 服务端入口。
 
-同时启动两个服务：
-  - OTA HTTP 配置接口（把设备引导到本服务端的 WebSocket）
-  - WebSocket 语音通道（ASR -> LLM -> TTS 全链路）
+同时启动：
+  - OTA HTTP 配置接口
+  - 默认小智通道：MQTT 1883 + UDP 8001（ASR → LLM → TTS）
+  - 英语口语通道：MQTT 1884 + UDP 8003（Qwen-Omni Realtime S2S）
+  - WebSocket 语音通道（TRANSPORT=websocket 时使用）
 
 运行：
   python server.py
@@ -17,6 +19,7 @@ from xiaozhi.ota_server import start_ota_server
 from xiaozhi.ws_server import start_ws_server
 from xiaozhi.udp_server import UdpServer
 from xiaozhi.mqtt_broker import MqttBroker
+from xiaozhi.english_session import EnglishSession
 
 
 def setup_logging():
@@ -25,7 +28,6 @@ def setup_logging():
         format="%(asctime)s %(levelname)s [%(name)s] %(message)s",
         datefmt="%H:%M:%S",
     )
-    # 降低第三方库噪音
     logging.getLogger("websockets").setLevel(logging.WARNING)
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
@@ -41,30 +43,48 @@ async def main():
 
     log.info("=" * 60)
     log.info("小智服务端启动中……")
-    log.info("LLM 模型: %s", config.LLM_MODEL)
-    log.info("ASR 模型: %s", config.ASR_MODEL)
-    log.info("TTS 模型: %s (音色=%s)", config.TTS_MODEL, config.TTS_VOICE)
+    log.info("【默认通道】LLM=%s ASR=%s TTS=%s", config.LLM_MODEL, config.ASR_MODEL, config.TTS_MODEL)
+    log.info("【默认通道】MQTT %s:%d  UDP %s:%d", config.PUBLIC_HOST, config.MQTT_PORT, config.PUBLIC_HOST, config.UDP_PORT)
+    if config.ENGLISH_ENABLED:
+        log.info("【英语通道】Omni=%s voice=%s", config.ENGLISH_OMNI_MODEL, config.ENGLISH_OMNI_VOICE)
+        log.info(
+            "【英语通道】MQTT %s:%d  UDP %s:%d",
+            config.PUBLIC_HOST, config.ENGLISH_MQTT_PORT,
+            config.PUBLIC_HOST, config.ENGLISH_UDP_PORT,
+        )
     log.info("设备传输方式(TRANSPORT): %s", config.TRANSPORT)
     log.info("对外地址(PUBLIC_HOST): %s", config.PUBLIC_HOST)
     log.info("=" * 60)
 
     loop = asyncio.get_running_loop()
 
-    # OTA 配置接口（把设备引导到正确的语音通道）
     ota_runner = await start_ota_server()
-
-    # WebSocket 通道（TRANSPORT=websocket 时使用）
     ws_server = await start_ws_server()
 
-    # MQTT + UDP 通道（设备默认，TRANSPORT=mqtt 时使用）
+    # 默认小智：MQTT + UDP
     udp_server = UdpServer(loop)
     await udp_server.start(config.UDP_HOST, config.UDP_PORT)
-    mqtt_broker = MqttBroker(loop, udp_server)
+    mqtt_broker = MqttBroker(loop, udp_server, name="default")
     mqtt_tcp = await mqtt_broker.start(config.MQTT_HOST, config.MQTT_PORT)
 
+    # 英语口语练习：独立 MQTT + UDP（互不影响）
+    english_mqtt_tcp = None
+    if config.ENGLISH_ENABLED:
+        english_udp = UdpServer(loop)
+        await english_udp.start(config.UDP_HOST, config.ENGLISH_UDP_PORT)
+        english_broker = MqttBroker(
+            loop, english_udp, session_class=EnglishSession, name="english"
+        )
+        english_mqtt_tcp = await english_broker.start(config.MQTT_HOST, config.ENGLISH_MQTT_PORT)
+
     log.info("服务已就绪。按 Ctrl+C 退出。")
+    if config.ENGLISH_ENABLED:
+        log.info(
+            "英语练习 OTA: http://%s:%d/xiaozhi/ota/english/",
+            config.PUBLIC_HOST, config.OTA_PORT,
+        )
     try:
-        await asyncio.Future()  # 永久运行
+        await asyncio.Future()
     except asyncio.CancelledError:
         pass
     finally:
@@ -72,6 +92,9 @@ async def main():
         await ws_server.wait_closed()
         mqtt_tcp.close()
         await mqtt_tcp.wait_closed()
+        if english_mqtt_tcp is not None:
+            english_mqtt_tcp.close()
+            await english_mqtt_tcp.wait_closed()
         await ota_runner.cleanup()
         log.info("服务已停止")
 

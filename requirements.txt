@@ -1,5 +1,5 @@
 # 阿里云百炼（DashScope）官方 SDK：用于 ASR(Paraformer) / LLM(Qwen) / TTS(CosyVoice)
-dashscope>=1.20.0
+dashscope>=1.23.9
 
 # WebSocket 服务端（设备语音通道）
 websockets>=12.0
@@ -15,3 +15,6 @@ opuslib>=3.0.1
 
 # PCM 音频数据处理
 numpy>=1.24.0
+
+# MySQL（英语用户画像等）
+PyMySQL>=1.1.0

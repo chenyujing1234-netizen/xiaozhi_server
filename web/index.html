@@ -1,0 +1,411 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>语伴 LinkPal — 开源 ESP32 语音学伴</title>
+  <meta name="description" content="语伴 LinkPal 是一款开源语音学伴硬件：中文聊小智，英语练口语 SpeakPal，服务端可自建、智能体可换。">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body>
+
+<nav class="site-nav">
+  <div class="container nav-inner">
+    <a class="logo" href="/">
+      <span class="logo-icon">LP</span>
+      语伴 LinkPal
+    </a>
+    <ul class="nav-links">
+      <li><a href="#features">功能</a></li>
+      <li><a href="#modes">智能体</a></li>
+      <li><a href="#opensource">开源</a></li>
+      <li><a href="#hardware">硬件清单</a></li>
+      <li><a href="#start">快速上手</a></li>
+      <li><a href="/english-test/">Web 英语测试</a></li>
+      <li><a class="nav-cta" href="https://github.com/chenyujing1234-netizen/xiaozhi_server" target="_blank" rel="noopener">GitHub 服务端</a></li>
+    </ul>
+  </div>
+</nav>
+
+<header class="hero">
+  <div class="container hero-grid">
+    <div>
+      <div class="hero-badge">
+        <span class="open-tag">100% 开源</span>
+        基于小智 ESP32 生态 · CC-BY-4.0
+      </div>
+      <h1>语伴 LinkPal<br>开源 AI 语音学伴</h1>
+      <p class="hero-sub">LinkPal Box · ESP32-S3 语音盒子</p>
+      <p class="hero-slogan">开口说，有人陪。</p>
+      <p class="hero-sub">中文聊小智，英语练口语。服务端可自建，智能体可换，硬件可复刻。</p>
+      <div class="hero-actions">
+        <a class="btn btn-primary" href="#hardware">查看硬件清单</a>
+        <a class="btn btn-outline" href="#opensource">获取开源代码</a>
+      </div>
+    </div>
+    <div>
+      <img class="hero-img" src="/static/images/kit-assembled.png" alt="LinkPal Box 成品面包板方案">
+    </div>
+  </div>
+</header>
+
+<section id="features">
+  <div class="container">
+    <span class="section-label">核心功能</span>
+    <h2 class="section-title">不是翻译机，是你的语音学伴</h2>
+    <p class="section-desc">语伴 LinkPal 基于 ESP32-S3 便携语音硬件，搭配自建 Python 服务端。中文走 ASR→LLM→TTS 全链路；英语走 Omni 端到端 S2S，直接纠正发音与语法。</p>
+    <div class="features-grid">
+      <div class="feature-card">
+        <div class="feature-icon blue">🎙️</div>
+        <h3>脱手机、低干扰</h3>
+        <p>ESP32-S3 + 麦克风 + 喇叭 + 小屏，独立语音交互，适合学生与儿童场景，减少屏幕依赖。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon orange">🗣️</div>
+        <h3>口语伴 SpeakPal</h3>
+        <p>英语模式采用百炼 Omni Realtime 端到端语音，听你说、直接纠正，不是 ASR→翻译→TTS 流水线。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">🔓</div>
+        <h3>全栈开源可自建</h3>
+        <p>固件、服务端、硬件方案全部开源。替换 OTA 地址即可连到你自己的服务器，智能体模式可扩展。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon blue">🤖</div>
+        <h3>小智中文对话</h3>
+        <p>默认小智模式：流式 ASR + 通义千问 + CosyVoice TTS，支持唤醒词、状态屏显与 MCP 设备控制。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon orange">🔄</div>
+        <h3>OTA 切换智能体</h3>
+        <p>同一硬件，改 OTA URL 即可切换小智 / 英语陪练，无需换板子。后续可扩展化学引导等更多模式。</p>
+      </div>
+      <div class="feature-card">
+        <div class="feature-icon green">🛠️</div>
+        <h3>创客友好</h3>
+        <p>面包板套件可快速上手；也可参考 LinkDog 生态做机器狗形态。BOM 透明，成本可控。</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="modes" style="background: var(--white);">
+  <div class="container">
+    <span class="section-label">智能体模式</span>
+    <h2 class="section-title">一个硬件，多种学伴</h2>
+    <p class="section-desc">通过修改设备 OTA 地址切换模式。服务端已在本机部署，地址会根据当前域名自动显示。</p>
+    <div class="modes-grid">
+      <div class="mode-card">
+        <div class="mode-header">
+          <h3>小智助手</h3>
+          <p style="color:var(--muted);font-size:0.9rem;">默认模式 · 中文对话</p>
+          <span class="mode-tag default">MQTT 1883 · UDP 8001</span>
+        </div>
+        <div class="mode-body">
+          <p>日常语音助手：问答、陪伴、设备控制。ASR → Qwen → CosyVoice 流式全链路。</p>
+          <ul>
+            <li>唤醒词「你好小智」</li>
+            <li>屏幕状态：聆听 / 说话 / 思考</li>
+            <li>错误语音提示 + 屏幕 alert</li>
+          </ul>
+          <p style="margin-top:16px;font-size:0.88rem;">OTA 地址：<br><code id="ota-default">http://YOUR_HOST:8002/xiaozhi/ota/</code></p>
+        </div>
+      </div>
+      <div class="mode-card">
+        <div class="mode-header">
+          <h3>口语伴 SpeakPal</h3>
+          <p style="color:var(--muted);font-size:0.9rem;">英语陪练 · Omni S2S</p>
+          <span class="mode-tag english">MQTT 1884 · UDP 8003</span>
+        </div>
+        <div class="mode-body">
+          <p>英语口语纠正：音频直接进 Omni Realtime，音频直接出，低延迟、自然对话感。</p>
+          <ul>
+            <li>引导式学习，纠正发音与语法</li>
+            <li>独立端口，不影响小智通道</li>
+            <li>静音超时自动结束会话</li>
+          </ul>
+          <p style="margin-top:16px;font-size:0.88rem;">OTA 地址：<br><code id="ota-english">http://YOUR_HOST:8002/xiaozhi/ota/english/</code></p>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="opensource">
+  <div class="container">
+    <span class="section-label">开源仓库</span>
+    <h2 class="section-title">固件 · 服务端 · 硬件资料</h2>
+    <p class="section-desc">基于 <a href="https://github.com/78/xiaozhi-esp32" target="_blank" rel="noopener">78/xiaozhi-esp32</a> 生态二次开发，硬件参考 LinkDog 开源 lineage，软件与服务端完全自建开源。</p>
+    <div class="opensource-grid">
+      <div class="os-card">
+        <div class="os-icon">📱</div>
+        <div>
+          <h4>设备固件（Gitee）<span class="license-badge">开源</span></h4>
+          <p>基于 xiaozhi-esp32 修改，支持 LinkPal Box 及小智协议，含英语模式适配。</p>
+          <a class="os-link" href="https://gitee.com/chenyujing/xiaozhi-esp32" target="_blank" rel="noopener">gitee.com/chenyujing/xiaozhi-esp32 →</a>
+        </div>
+      </div>
+      <div class="os-card">
+        <div class="os-icon">🐍</div>
+        <div>
+          <h4>Python 服务端（GitHub）<span class="license-badge">开源</span></h4>
+          <p>替代官方 mqtt.xiaozhi.me，支持 MQTT+UDP / WebSocket，含英语 Omni S2S 通道。</p>
+          <a class="os-link" href="https://github.com/chenyujing1234-netizen/xiaozhi_server" target="_blank" rel="noopener">github.com/chenyujing1234-netizen/xiaozhi_server →</a>
+        </div>
+      </div>
+      <div class="os-card">
+        <div class="os-icon">🐕</div>
+        <div>
+          <h4>LinkDog 硬件参考（立创开源）<span class="license-badge">CC-BY-4.0</span></h4>
+          <p>灵动狗 LinkDog 第三代，小智 AI 机器狗方案。PCB、3D 模型、组装教程。</p>
+          <a class="os-link" href="https://oshwhub.com/linkdog/linkdog-v2-0" target="_blank" rel="noopener">oshwhub.com/linkdog/linkdog-v2-0 →</a>
+        </div>
+      </div>
+      <div class="os-card">
+        <div class="os-icon">📦</div>
+        <div>
+          <h4>LinkDog 固件与 3D 模型（Gitee）</h4>
+          <p>机器狗版程序代码、3D 打印模型、小程序控制等完整资料。</p>
+          <a class="os-link" href="https://gitee.com/jeremywang0102/linkdog" target="_blank" rel="noopener">gitee.com/jeremywang0102/linkdog →</a>
+        </div>
+      </div>
+      <div class="os-card">
+        <div class="os-icon">⬆️</div>
+        <div>
+          <h4>上游固件（GitHub）</h4>
+          <p>小智 ESP32 官方开源固件，LinkPal 基于此二次开发。</p>
+          <a class="os-link" href="https://github.com/78/xiaozhi-esp32" target="_blank" rel="noopener">github.com/78/xiaozhi-esp32 →</a>
+        </div>
+      </div>
+      <div class="os-card">
+        <div class="os-icon">📋</div>
+        <div>
+          <h4>硬件接线教程（PDF）</h4>
+          <p>小智 AI 聊天机器人硬件清单与面包板接线说明，适合 LinkPal Box 复刻。</p>
+          <a class="os-link" href="/static/docs/hardware-guide.pdf" target="_blank" rel="noopener">下载硬件清单与接线教程 →</a>
+        </div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<section id="hardware" style="background: var(--white);">
+  <div class="container">
+    <span class="section-label">硬件 BOM</span>
+    <h2 class="section-title">LinkPal Box 硬件清单</h2>
+    <p class="section-desc">推荐从套件入手快速验证，也可按 BOM 自行采购散件。预估复刻成本约 ¥80–150（不含电池）。</p>
+
+    <div class="kit-banner">
+      <img src="/static/images/kit-parts.png" alt="小智AI聊天机器人套件散件">
+      <div class="kit-highlight">
+        <h3>🛒 推荐：小智 AI 聊天机器人套件</h3>
+        <p style="color:var(--muted);margin-bottom:16px;font-size:0.92rem;">含 ESP32-S3 核心板及全部外围模块，面包板直插即用，最适合 LinkPal Box 快速上手。</p>
+        <ul>
+          <li><strong>ESP32-S3-N16R8</strong> 核心板（16MB Flash + 8MB PSRAM）</li>
+          <li><strong>INMP441</strong> I2S 数字麦克风</li>
+          <li><strong>MAX98357</strong> I2S 音频功放模块</li>
+          <li><strong>0.91 寸 OLED</strong> 显示屏 + 按键 + 扬声器</li>
+          <li>400 孔面包板 ×2、140 根跳线、USB 数据线</li>
+        </ul>
+        <p style="margin-top:20px;">
+          <a class="btn btn-primary" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener" style="display:inline-flex;">购买套件 →</a>
+        </p>
+      </div>
+    </div>
+
+    <div class="bom-wrap">
+      <table class="bom-table">
+        <thead>
+          <tr>
+            <th>序号</th>
+            <th>器件</th>
+            <th>规格说明</th>
+            <th>数量</th>
+            <th>参考购买</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>1</td>
+            <td><strong>ESP32-S3 开发板</strong></td>
+            <td>ESP32-S3-N16R8，16MB Flash + 8MB OPI PSRAM，USB-C</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>2</td>
+            <td><strong>INMP441 麦克风</strong></td>
+            <td>I2S 数字 MEMS 麦克风模块，3.3V 供电</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://s.taobao.com/search?q=INMP441+%E9%BA%A6%E5%85%8B%E9%A3%8E" target="_blank" rel="noopener">淘宝搜索 →</a></td>
+          </tr>
+          <tr>
+            <td>3</td>
+            <td><strong>MAX98357 功放</strong></td>
+            <td>I2S 数字音频功放，驱动 4Ω/8Ω 喇叭</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://s.taobao.com/search?q=INMP441+%E9%BA%A6%E5%85%8B%E9%A3%8E" target="_blank" rel="noopener">淘宝搜索 →</a></td>
+          </tr>
+          <tr>
+            <td>4</td>
+            <td><strong>0.91 寸 OLED 屏</strong></td>
+            <td>128×32 I2C OLED，显示状态与表情</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>5</td>
+            <td><strong>小喇叭</strong></td>
+            <td>4Ω 3W 腔体喇叭，带杜邦线</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>6</td>
+            <td><strong>轻触按键</strong></td>
+            <td>6×6mm 轻触开关，音量/功能键</td>
+            <td class="qty">×2</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>7</td>
+            <td><strong>面包板 + 跳线</strong></td>
+            <td>400 孔面包板 ×2，140 根跳线盒装</td>
+            <td class="qty">×1 套</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>8</td>
+            <td><strong>USB 数据线</strong></td>
+            <td>USB-A 转 Type-C，烧录与供电</td>
+            <td class="qty">×1</td>
+            <td><a class="buy-link" href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">套件含 →</a></td>
+          </tr>
+          <tr>
+            <td>9</td>
+            <td><strong>锂电池（可选）</strong></td>
+            <td>3.7V 500–2000mAh + TP4056 充放电模块，便携使用</td>
+            <td class="qty">×1 套</td>
+            <td><a class="buy-link" href="https://s.taobao.com/search?q=INMP441+%E9%BA%A6%E5%85%8B%E9%A3%8E" target="_blank" rel="noopener">淘宝搜索 →</a></td>
+          </tr>
+          <tr>
+            <td>10</td>
+            <td><strong>LinkDog 机器狗套件（可选）</strong></td>
+            <td>舵机、3D 打印外壳、ESP32C3 控制板，机器狗形态</td>
+            <td class="qty">×1 套</td>
+            <td><a class="buy-link" href="https://oshwhub.com/linkdog/linkdog-v2-0" target="_blank" rel="noopener">立创开源 →</a></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="start">
+  <div class="container">
+    <span class="section-label">快速上手</span>
+    <h2 class="section-title">四步连上你的语伴</h2>
+    <p class="section-desc">设备与服务器需在同一网络（或公网可达），防火墙放行对应端口。</p>
+    <div class="steps">
+      <div class="step">
+        <div class="step-num">1</div>
+        <h4>采购 & 组装</h4>
+        <p>购买套件，按接线教程连接麦克风、功放、屏幕与按键。</p>
+      </div>
+      <div class="step">
+        <div class="step-num">2</div>
+        <h4>烧录固件</h4>
+        <p>从 Gitee 拉取固件，ESP-IDF 编译烧录，设置 OTA URL 指向本服务器。</p>
+      </div>
+      <div class="step">
+        <div class="step-num">3</div>
+        <h4>启动服务端</h4>
+        <p><code>python server.py</code>，配置 PUBLIC_HOST 与 DASHSCOPE_API_KEY。</p>
+      </div>
+      <div class="step">
+        <div class="step-num">4</div>
+        <h4>唤醒对话</h4>
+        <p>说「你好小智」开始中文对话；切英语 OTA 即可练口语。</p>
+      </div>
+    </div>
+
+    <div style="margin-top:40px;background:var(--white);border:1px solid var(--border);border-radius:var(--radius);padding:28px;">
+      <h3 style="margin-bottom:16px;color:var(--blue-900);">服务端端口一览</h3>
+      <table class="bom-table" style="box-shadow:none;">
+        <thead>
+          <tr>
+            <th>服务</th>
+            <th>端口</th>
+            <th>说明</th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td>宣传站 / OTA</td>
+            <td class="qty">8002</td>
+            <td>本页面 + OTA 配置下发</td>
+          </tr>
+          <tr>
+            <td>MQTT 小智</td>
+            <td class="qty">1883</td>
+            <td>默认中文对话控制通道</td>
+          </tr>
+          <tr>
+            <td>UDP 小智</td>
+            <td class="qty">8001</td>
+            <td>加密 Opus 音频上下行</td>
+          </tr>
+          <tr>
+            <td>MQTT 英语</td>
+            <td class="qty">1884</td>
+            <td>SpeakPal 口语陪练控制通道</td>
+          </tr>
+          <tr>
+            <td>UDP 英语</td>
+            <td class="qty">8003</td>
+            <td>SpeakPal 音频通道</td>
+          </tr>
+          <tr>
+            <td>WebSocket</td>
+            <td class="qty">8000</td>
+            <td>可选，TRANSPORT=websocket 时使用</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer class="site-footer">
+  <div class="container">
+    <div class="footer-grid">
+      <div>
+        <div class="footer-brand">语伴 LinkPal</div>
+        <p>开源 ESP32 语音学伴 · 中文小智 + 英语 SpeakPal<br>Speak out. Someone's listening.</p>
+      </div>
+      <div class="footer-col">
+        <h5>开源链接</h5>
+        <ul>
+          <li><a href="https://gitee.com/chenyujing/xiaozhi-esp32" target="_blank" rel="noopener">设备固件 Gitee</a></li>
+          <li><a href="https://github.com/chenyujing1234-netizen/xiaozhi_server" target="_blank" rel="noopener">服务端 GitHub</a></li>
+          <li><a href="https://oshwhub.com/linkdog/linkdog-v2-0" target="_blank" rel="noopener">LinkDog 硬件</a></li>
+        </ul>
+      </div>
+      <div class="footer-col">
+        <h5>联系我们</h5>
+        <ul>
+          <li>硬件套件：<a href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">芯路city</a></li>
+          <li>本页由 LinkPal 服务端托管</li>
+          <li id="footer-host">服务器：—</li>
+        </ul>
+      </div>
+    </div>
+    <div class="footer-bottom">
+      <p>基于 <a href="https://github.com/78/xiaozhi-esp32">xiaozhi-esp32</a> 开源生态 · 硬件参考 LinkDog CC-BY-4.0 · 语伴 LinkPal © 2026</p>
+    </div>
+  </div>
+</footer>
+
+<script src="/static/main.js"></script>
+</body>
+</html>

@@ -43,24 +43,42 @@ class OpusEncoder:
         self.frame_size = int(sample_rate * frame_ms / 1000)  # 24000*60/1000 = 1440
         self.bytes_per_frame = self.frame_size * channels * 2  # int16
         self._enc = opuslib.Encoder(sample_rate, channels, opuslib.APPLICATION_VOIP)
+        self._carry = b""
 
-    def encode_pcm_stream(self, pcm_bytes: bytes):
-        """把任意长度的 PCM16 字节，切成 60ms 一帧，逐帧编码并 yield Opus 包。
+    def reset(self):
+        """新一轮下行音频开始前清空帧间残留。"""
+        self._carry = b""
 
-        最后不足一帧的部分会补零后编码（保证尾音不丢）。
+    def encode_pcm_stream(self, pcm_bytes: bytes, *, flush: bool = False):
+        """把 PCM16 切成 60ms 一帧编码为 Opus。
+
+        流式输入时（如 Omni audio.delta）会把不足一帧的尾部缓存在 _carry，
+        等下一段 PCM 补齐后再编码，避免在分片边界补零造成杂音。
+        flush=True 时在末尾补齐最后一帧（一轮回复结束时调用）。
         """
-        if not pcm_bytes:
+        data = self._carry + (pcm_bytes or b"")
+        self._carry = b""
+        if not data:
             return
+
         step = self.bytes_per_frame
-        total = len(pcm_bytes)
         offset = 0
-        while offset < total:
-            chunk = pcm_bytes[offset:offset + step]
+        total = len(data)
+        while offset + step <= total:
+            chunk = data[offset:offset + step]
             offset += step
-            if len(chunk) < step:
-                chunk = chunk + b"\x00" * (step - len(chunk))
             try:
                 yield self._enc.encode(chunk, self.frame_size)
             except Exception as e:  # noqa: BLE001
                 logger.warning("Opus 编码失败: %s", e)
-                continue
+
+        remainder = data[offset:]
+        if remainder:
+            if flush:
+                chunk = remainder + b"\x00" * (step - len(remainder))
+                try:
+                    yield self._enc.encode(chunk, self.frame_size)
+                except Exception as e:  # noqa: BLE001
+                    logger.warning("Opus 编码失败: %s", e)
+            else:
+                self._carry = remainder

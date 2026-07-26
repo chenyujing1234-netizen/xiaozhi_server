@@ -14,5 +14,7 @@ env/
 
 # 运行产物
 saved_audio/
+data/
 *.wav
 *.log
+*.db
