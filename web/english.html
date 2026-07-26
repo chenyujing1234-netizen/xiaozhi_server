@@ -1,0 +1,62 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="format-detection" content="telephone=no">
+  <title>SpeakPal 英语口语</title>
+  <link rel="stylesheet" href="/static/english-app.css">
+</head>
+<body>
+  <div class="app" id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">SP</span>
+        <div>
+          <h1>SpeakPal</h1>
+          <p class="brand-sub">AI 英语口语陪练</p>
+        </div>
+      </div>
+      <div class="status-pill" id="status-pill">
+        <span class="status-dot" id="status-dot"></span>
+        <span id="status-text">连接中…</span>
+      </div>
+    </header>
+
+    <main class="chat" id="chat-scroll">
+      <div class="welcome" id="welcome-card">
+        <h2>开口就说，导师即时纠正</h2>
+        <p>按住下方按钮说英语。发现发音、用词或语法问题时，会用中文说明并示范正确说法。</p>
+        <ul>
+          <li>进入页面后自动连接，无需额外设置</li>
+          <li>微信内请允许麦克风权限</li>
+          <li>导师回复时，按住按钮即可打断</li>
+        </ul>
+      </div>
+      <div id="messages"></div>
+    </main>
+
+    <footer class="dock">
+      <button type="button" class="btn-talk" id="btn-talk" disabled aria-label="按住说话">
+        <span class="btn-talk-icon" aria-hidden="true">🎙</span>
+        <span class="btn-talk-label" id="btn-talk-label">按住说话</span>
+        <span class="btn-talk-hint" id="btn-talk-hint">松开结束</span>
+      </button>
+    </footer>
+
+    <div class="overlay hidden" id="overlay">
+      <div class="overlay-card">
+        <div class="spinner"></div>
+        <p id="overlay-text">正在连接 SpeakPal…</p>
+      </div>
+    </div>
+
+    <div class="toast hidden" id="toast"></div>
+  </div>
+
+  <script src="/static/english-core.js"></script>
+  <script src="/static/english-app.js"></script>
+</body>
+</html>

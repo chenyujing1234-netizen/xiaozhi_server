@@ -18,6 +18,8 @@
   var uplinkFrames = 0;
   var pendingFrames = [];
   var talkStartTime = 0;
+  var userTurnText = "";
+  var spacePttActive = false;
 
   var captureCtx = null;
   var captureStream = null;
@@ -339,13 +341,11 @@
     }
 
     if (type === "stt" && obj.text) {
-      el.userText.textContent = obj.text;
+      userTurnText = obj.text;
+      el.userText.textContent = userTurnText;
       el.userBubble.classList.remove("hidden");
-      // 新一轮用户发言：清空导师字幕与纠错要点，等待流式填充
-      el.tutorText.textContent = "";
-      if (el.correctionText) el.correctionText.textContent = "";
-      if (el.correctionBubble) el.correctionBubble.classList.add("hidden");
-      setState("识别: " + obj.text);
+      var label = obj.partial ? "识别中: " : "识别: ";
+      setState(label + userTurnText);
       return;
     }
 
@@ -490,6 +490,12 @@
     pendingFrames = [];
     uplinkFrames = 0;
     uplinkLive = false;
+    userTurnText = "";
+    el.userText.textContent = "";
+    el.userBubble.classList.add("hidden");
+    el.tutorText.textContent = "";
+    if (el.correctionText) el.correctionText.textContent = "";
+    if (el.correctionBubble) el.correctionBubble.classList.add("hidden");
 
     try {
       await startMic();
@@ -541,6 +547,44 @@
     setConn(true, true);
   }
 
+  function isTypingTarget(target) {
+    if (!target) return false;
+    var tag = target.tagName;
+    return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+  }
+
+  function isSpaceKey(e) {
+    return e.code === "Space";
+  }
+
+  function hasPttModifier(e) {
+    return e.altKey || e.ctrlKey || e.metaKey;
+  }
+
+  function onSpaceDown(e) {
+    if (!isSpaceKey(e)) return;
+    if (e.repeat) return;
+    if (hasPttModifier(e)) return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    // 鼠标已在按住说话时，忽略空格，避免误触结束
+    if (recording && !spacePttActive) return;
+    if (!spacePttActive) {
+      spacePttActive = true;
+      startTalk();
+    }
+  }
+
+  function onSpaceUp(e) {
+    if (!isSpaceKey(e)) return;
+    if (isTypingTarget(e.target)) return;
+    e.preventDefault();
+    if (spacePttActive) {
+      spacePttActive = false;
+      stopTalk();
+    }
+  }
+
   function abortPlayback() {
     if (!connected && !speaking) return;
     log("→ abort（停止播放）");
@@ -557,6 +601,7 @@
   el.btnStop.addEventListener("click", abortPlayback);
 
   el.btnTalk.addEventListener("mousedown", function (e) {
+    if (hasPttModifier(e)) return;
     e.preventDefault();
     startTalk();
   });
@@ -574,5 +619,14 @@
     stopTalk();
   }, { passive: false });
 
-  log("页面就绪。请先点击「连接服务器」，再按住说话。");
+  document.addEventListener("keydown", onSpaceDown);
+  document.addEventListener("keyup", onSpaceUp);
+  window.addEventListener("blur", function () {
+    if (spacePttActive) {
+      spacePttActive = false;
+      stopTalk();
+    }
+  });
+
+  log("页面就绪。请先点击「连接服务器」，再按住按钮或空格键说话。");
 })();

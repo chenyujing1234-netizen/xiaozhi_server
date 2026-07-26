@@ -50,6 +50,15 @@ class Config:
     OTA_HOST = os.getenv("OTA_HOST", "0.0.0.0")
     OTA_PORT = int(os.getenv("OTA_PORT", "8002"))
 
+    # 面向用户的 Web 页（SpeakPal）：HTTPS + WSS，微信内录音需安全上下文
+    HTTPS_ENABLED = os.getenv("HTTPS_ENABLED", "1") == "1"
+    HTTPS_PORT = int(os.getenv("HTTPS_PORT", "8443"))
+    WSS_PORT = int(os.getenv("WSS_PORT", "8444"))
+    SSL_CERT_FILE = os.getenv("SSL_CERT_FILE", "certs/server.crt")
+    SSL_KEY_FILE = os.getenv("SSL_KEY_FILE", "certs/server.key")
+    # 正式域名（nginx + Let's Encrypt 终止 TLS 时使用，如 linkpal.cloud）
+    ENGLISH_WEB_DOMAIN = os.getenv("ENGLISH_WEB_DOMAIN", "").strip()
+
     # ---- DashScope / 阿里百炼 ----
     # 提示：把密钥放进环境变量更安全。这里内置了你提供的 key 作为默认值，方便直接运行。
     DASHSCOPE_API_KEY = os.getenv(
@@ -168,6 +177,22 @@ class Config:
     @property
     def english_ws_url_for_device(self) -> str:
         return f"ws://{self.PUBLIC_HOST}:{self.WS_PORT}{self.ENGLISH_WS_PATH}"
+
+    @property
+    def english_wss_url_for_web(self) -> str:
+        if self.ENGLISH_WEB_DOMAIN:
+            return f"wss://{self.ENGLISH_WEB_DOMAIN}{self.ENGLISH_WS_PATH}"
+        if self.HTTPS_ENABLED:
+            return f"wss://{self.PUBLIC_HOST}:{self.WSS_PORT}{self.ENGLISH_WS_PATH}"
+        return self.english_ws_url_for_device
+
+    @property
+    def english_web_url(self) -> str:
+        if self.ENGLISH_WEB_DOMAIN:
+            return f"https://{self.ENGLISH_WEB_DOMAIN}/english/"
+        if self.HTTPS_ENABLED:
+            return f"https://{self.PUBLIC_HOST}:{self.HTTPS_PORT}/english/"
+        return f"http://{self.PUBLIC_HOST}:{self.OTA_PORT}/english/"
 
 
 config = Config()

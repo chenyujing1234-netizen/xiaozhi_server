@@ -73,16 +73,26 @@ async def _handler(websocket):
         logger.info("会话已清理 session_id=%s", session.session_id)
 
 
-async def start_ws_server():
-    logger.info("WebSocket 服务监听 ws://%s:%d%s", config.WS_HOST, config.WS_PORT, config.WS_PATH)
-    logger.info("设备应连接（默认）: %s", config.ws_url_for_device)
-    if config.ENGLISH_ENABLED:
-        logger.info("设备应连接（英语）: %s", config.english_ws_url_for_device)
+async def start_ws_server(*, port=None, ssl_context=None):
+    port = port or config.WS_PORT
+    secure = ssl_context is not None
+    scheme = "wss" if secure else "ws"
+    logger.info(
+        "WebSocket 服务监听 %s://%s:%d（英语 path=%s）",
+        scheme, config.WS_HOST, port, config.ENGLISH_WS_PATH,
+    )
+    if not secure:
+        logger.info("设备应连接（默认）: %s", config.ws_url_for_device)
+        if config.ENGLISH_ENABLED:
+            logger.info("设备应连接（英语）: %s", config.english_ws_url_for_device)
+    elif config.ENGLISH_ENABLED:
+        logger.info("Web 客户端（英语 WSS）: %s", config.english_wss_url_for_web)
     server = await websockets.serve(
         _handler,
         config.WS_HOST,
-        config.WS_PORT,
-        max_size=None,        # 音频帧不限制大小
+        port,
+        ssl=ssl_context,
+        max_size=None,
         ping_interval=30,
         ping_timeout=60,
     )

@@ -17,6 +17,7 @@ import dashscope
 from config import config
 from xiaozhi.ota_server import start_ota_server
 from xiaozhi.ws_server import start_ws_server
+from xiaozhi.ssl_util import load_server_ssl_context
 from xiaozhi.udp_server import UdpServer
 from xiaozhi.mqtt_broker import MqttBroker
 from xiaozhi.english_session import EnglishSession
@@ -58,8 +59,17 @@ async def main():
 
     loop = asyncio.get_running_loop()
 
-    ota_runner = await start_ota_server()
+    ssl_context = None
+    if config.HTTPS_ENABLED:
+        ssl_context = load_server_ssl_context(
+            config.SSL_CERT_FILE, config.SSL_KEY_FILE, config.PUBLIC_HOST,
+        )
+
+    ota_runner = await start_ota_server(ssl_context=ssl_context)
     ws_server = await start_ws_server()
+    wss_server = None
+    if ssl_context is not None:
+        wss_server = await start_ws_server(port=config.WSS_PORT, ssl_context=ssl_context)
 
     # 默认小智：MQTT + UDP
     udp_server = UdpServer(loop)
@@ -83,6 +93,9 @@ async def main():
             "英语练习 OTA: http://%s:%d/xiaozhi/ota/english/",
             config.PUBLIC_HOST, config.OTA_PORT,
         )
+        if config.HTTPS_ENABLED:
+            log.info("SpeakPal 用户入口: %s", config.english_web_url)
+            log.info("SpeakPal WebSocket: %s", config.english_wss_url_for_web)
     try:
         await asyncio.Future()
     except asyncio.CancelledError:
@@ -90,6 +103,9 @@ async def main():
     finally:
         ws_server.close()
         await ws_server.wait_closed()
+        if wss_server is not None:
+            wss_server.close()
+            await wss_server.wait_closed()
         mqtt_tcp.close()
         await mqtt_tcp.wait_closed()
         if english_mqtt_tcp is not None:

@@ -105,6 +105,7 @@ class EnglishSession:
         self._history_context = ""
         self._last_user_text = ""
         self._last_tutor_text = ""
+        self._user_turn_buf = ""
         self._tutor_stream_buf = ""
         self._tts_start_sent = False
         self._turn_saved = False
@@ -288,6 +289,7 @@ class EnglishSession:
         self._consecutive_speech_frames = 0
         self._uplink_open = True
         self._omni_pcm_bytes = 0
+        self._user_turn_buf = ""
 
         try:
             await self._open_omni()
@@ -585,9 +587,28 @@ class EnglishSession:
         except Exception:  # noqa: BLE001
             pass
 
+    def _append_user_transcript(self, text: str) -> str:
+        """同一次按住说话内，server_vad 可能多段转写，拼成完整一句。"""
+        part = (text or "").strip()
+        if not part:
+            return self._user_turn_buf
+        if self._user_turn_buf:
+            self._user_turn_buf = f"{self._user_turn_buf} {part}"
+        else:
+            self._user_turn_buf = part
+        return self._user_turn_buf
+
+    def _user_display_text(self, *, in_progress: str = "") -> str:
+        preview = (in_progress or "").strip()
+        if self._user_turn_buf and preview:
+            return f"{self._user_turn_buf} {preview}"
+        if self._user_turn_buf:
+            return self._user_turn_buf
+        return preview
+
     async def _on_omni_event(self, event: dict):
         etype = event.get("type", "")
-        # 字幕增量不走音频锁：避免被下行音频节流拖住，页面可即时刷新
+        # 字幕/转写增量不走音频锁：避免被下行音频节流拖住，页面可即时刷新
         if etype == "response.audio_transcript.delta":
             try:
                 await self._on_tutor_transcript_delta(event)
@@ -596,8 +617,26 @@ class EnglishSession:
                     "[english][%s] 处理字幕增量异常: %s", self.session_id, e
                 )
             return
+        if etype == "conversation.item.input_audio_transcription.delta":
+            try:
+                await self._on_user_transcript_delta(event)
+            except Exception as e:  # noqa: BLE001
+                logger.exception(
+                    "[english][%s] 处理用户转写增量异常: %s", self.session_id, e
+                )
+            return
         async with self._omni_lock:
             await self._dispatch_omni_event(event)
+
+    async def _on_user_transcript_delta(self, event: dict):
+        preview = (event.get("text") or "") + (event.get("stash") or "")
+        display = self._user_display_text(in_progress=preview)
+        if display:
+            await self._send_json({
+                "type": "stt",
+                "text": display,
+                "partial": True,
+            })
 
     async def _ensure_tts_start(self):
         if self._tts_start_sent:
@@ -630,16 +669,21 @@ class EnglishSession:
             elif etype == "conversation.item.input_audio_transcription.completed":
                 text = event.get("transcript", "")
                 if text:
-                    logger.info("[english][%s] 用户说: %s", self.session_id, text)
-                    self._last_user_text = text
+                    full = self._append_user_transcript(text)
+                    logger.info("[english][%s] 用户说: %s", self.session_id, full)
+                    self._last_user_text = full
                     self._last_tutor_text = ""
                     self._tutor_stream_buf = ""
                     self._tts_start_sent = False
                     self._turn_saved = False
-                    await self._send_json({"type": "stt", "text": text})
+                    await self._send_json({
+                        "type": "stt",
+                        "text": full,
+                        "partial": False,
+                    })
                     # 显式偏好：异步立刻沉淀画像，避免阻塞 Omni 事件循环
-                    if looks_like_preference_request(text):
-                        self._schedule_explicit_profile_refine(text)
+                    if looks_like_preference_request(full):
+                        self._schedule_explicit_profile_refine(full)
 
             elif etype == "response.audio.delta":
                 delta_b64 = event.get("delta", "")

@@ -126,6 +126,14 @@ async def _handle_english_test(_request: web.Request) -> web.FileResponse:
     return web.FileResponse(WEB_DIR / "english-test.html")
 
 
+async def _handle_english(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "english.html")
+
+
+async def _handle_speak_redirect(_request: web.Request) -> web.Response:
+    raise web.HTTPFound("/english/")
+
+
 def build_app() -> web.Application:
     app = web.Application()
     # 设备的 OTA URL 形如 http://host:port/xiaozhi/ota/
@@ -139,6 +147,10 @@ def build_app() -> web.Application:
         app.router.add_get("/", _handle_site_index)
         app.router.add_get("/english-test", _handle_english_test)
         app.router.add_get("/english-test/", _handle_english_test)
+        app.router.add_get("/english", _handle_english)
+        app.router.add_get("/english/", _handle_english)
+        app.router.add_get("/speak", _handle_speak_redirect)
+        app.router.add_get("/speak/", _handle_speak_redirect)
         app.router.add_static("/static", WEB_DIR / "static", show_index=False)
     else:
         logger.warning("宣传站目录不存在: %s，根路径仍走 OTA", WEB_DIR)
@@ -146,19 +158,31 @@ def build_app() -> web.Application:
     return app
 
 
-async def start_ota_server():
+async def start_ota_server(*, ssl_context=None):
     app = build_app()
     runner = web.AppRunner(app)
     await runner.setup()
     site = web.TCPSite(runner, config.OTA_HOST, config.OTA_PORT)
     await site.start()
     logger.info("OTA 服务监听 http://%s:%d/xiaozhi/ota/", config.OTA_HOST, config.OTA_PORT)
+    if ssl_context is not None:
+        https_site = web.TCPSite(
+            runner, config.OTA_HOST, config.HTTPS_PORT, ssl_context=ssl_context,
+        )
+        await https_site.start()
+        logger.info(
+            "HTTPS 页面监听 https://%s:%d/english/",
+            config.PUBLIC_HOST, config.HTTPS_PORT,
+        )
     if WEB_DIR.is_dir():
         logger.info("宣传站: http://%s:%d/", config.PUBLIC_HOST, config.OTA_PORT)
         logger.info(
             "英语 Web 测试: http://%s:%d/english-test/",
             config.PUBLIC_HOST, config.OTA_PORT,
         )
+        if config.ENGLISH_ENABLED:
+            logger.info("SpeakPal 用户页: %s", config.english_web_url)
+            logger.info("SpeakPal 短链: %s", config.english_web_url.replace("/english/", "/speak/"))
     logger.info("请把设备 OTA URL 设置为: http://%s:%d/xiaozhi/ota/", config.PUBLIC_HOST, config.OTA_PORT)
     if config.ENGLISH_ENABLED:
         logger.info(

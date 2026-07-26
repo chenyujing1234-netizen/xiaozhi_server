@@ -11,6 +11,9 @@ env/
 
 # 本地配置与密钥
 .env
+certs/*.crt
+certs/*.key
+!certs/.gitkeep
 
 # 运行产物
 saved_audio/
