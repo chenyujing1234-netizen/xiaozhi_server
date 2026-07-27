@@ -136,6 +136,10 @@ async def _handle_speak_redirect(_request: web.Request) -> web.Response:
 
 def build_app() -> web.Application:
     app = web.Application()
+    # SpeakPal 登录（手机号 / 微信 openid）
+    from xiaozhi.auth_api import setup_auth_routes
+
+    setup_auth_routes(app)
     # 设备的 OTA URL 形如 http://host:port/xiaozhi/ota/
     app.router.add_route("*", "/xiaozhi/ota/", _handle_ota)
     app.router.add_route("*", "/xiaozhi/ota", _handle_ota)

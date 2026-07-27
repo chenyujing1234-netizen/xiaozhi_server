@@ -338,6 +338,10 @@
       this._emit("correction", obj);
       return;
     }
+    if (type === "image_ack") {
+      this._emit("imageAck", obj);
+      return;
+    }
     if (type === "tts") {
       if (obj.state === "start") {
         this.speaking = true;
@@ -472,6 +476,28 @@
     this.speaking = false;
     this._sendJson({ type: "abort", reason: "user" });
     this._emit("abort", {});
+  };
+
+  SpeakPalClient.prototype.sendImage = function (base64Jpeg) {
+    if (!this.connected) {
+      this._emit("error", { message: "尚未连接，无法上传图片" });
+      return false;
+    }
+    if (!base64Jpeg) {
+      this._emit("error", { message: "图片为空" });
+      return false;
+    }
+    // 去掉 data URL 前缀，只传纯 base64
+    var data = String(base64Jpeg);
+    if (data.indexOf(",") >= 0) data = data.split(",")[1];
+    this._sendJson({ type: "image", format: "jpeg", data: data });
+    this._emit("imageSend", { bytesEstimate: Math.floor(data.length * 0.75) });
+    return true;
+  };
+
+  SpeakPalClient.prototype.clearImage = function () {
+    if (!this.connected) return;
+    this._sendJson({ type: "image_clear" });
   };
 
   SpeakPalClient.prototype.destroy = function () {

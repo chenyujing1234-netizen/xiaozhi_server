@@ -29,7 +29,12 @@ from typing import Optional
 from config import config
 from .opus_codec import OpusDecoder, OpusEncoder
 from .text_utils import SentenceSplitter
-from .audio_utils import is_speech, pcm_rms
+from .silence_vad import (
+    EmptyTurnTracker,
+    SilenceGate,
+    WatchdogTask,
+    silence_watchdog_loop,
+)
 from .providers import asr as asr_provider
 from .providers import llm as llm_provider
 from .providers import tts as tts_provider
@@ -76,20 +81,23 @@ class Session:
         self._audio_queue: asyncio.Queue = asyncio.Queue()
         self._audio_task: Optional[asyncio.Task] = None
 
-        # 静音超时：基于 VAD 连续静音时长（秒），不受 ASR partial 干扰
-        self._quiet_since: Optional[float] = None
-        self._consecutive_speech_frames: int = 0
-        self._silence_watchdog: Optional[asyncio.Task] = None
+        # 静音 / VAD（与英语通道共用 SilenceGate）
+        self._vad = SilenceGate(
+            channel="default",
+            session_id=self.session_id,
+            log_enabled=config.LOG_AUDIO_RMS,
+            track_utterance=True,
+        )
+        self._silence_watchdog = WatchdogTask()
+        self._empty_turns = EmptyTurnTracker(
+            channel="default", session_id=self.session_id,
+        )
         self._turn_lock = asyncio.Lock()
         self._silence_closing = False
-        self._rms_log_counter: int = 0
         self._asr_feed_logged = False
         self._turn_t0: float = 0.0
-        self._utterance_had_speech = False
-        self._utterance_quiet_since: Optional[float] = None
         self._last_asr_partial: str = ""
         self._utterance_finalizing = False
-        self._empty_utterance_streak = 0
 
         # 录音保存（可选）
         self._save_pcm = bytearray() if config.SAVE_AUDIO else None
@@ -141,43 +149,13 @@ class Session:
             if not pcm:
                 continue
 
-            rms = pcm_rms(pcm)
-            if config.LOG_AUDIO_RMS:
-                self._rms_log_counter += 1
-                if self._rms_log_counter % 17 == 0:
-                    quiet_sec = (
-                        time.time() - self._quiet_since
-                        if self._quiet_since is not None
-                        else 0.0
-                    )
-                    logger.info(
-                        "[%s] 上行 RMS=%.0f 阈值=%.0f 连续语音帧=%d 静音=%.0fs",
-                        self.session_id,
-                        rms,
-                        config.SPEECH_RMS_THRESHOLD,
-                        self._consecutive_speech_frames,
-                        quiet_sec,
-                    )
-
-            if is_speech(pcm, config.SPEECH_RMS_THRESHOLD):
-                self._consecutive_speech_frames += 1
-                if self._consecutive_speech_frames >= config.SPEECH_FRAMES_REQUIRED:
-                    self._quiet_since = None
-                    self._utterance_quiet_since = None
-            else:
-                if self._consecutive_speech_frames >= config.SPEECH_FRAMES_REQUIRED:
-                    now = time.time()
-                    self._quiet_since = now
-                    if self._utterance_had_speech and self._utterance_quiet_since is None:
-                        self._utterance_quiet_since = now
-                self._consecutive_speech_frames = 0
-
-            if self._consecutive_speech_frames < config.SPEECH_FRAMES_REQUIRED:
+            result = self._vad.on_frame(pcm)
+            if not result.active_speech:
                 continue
 
             if not self._asr_feed_logged:
                 self._asr_feed_logged = True
-                self._utterance_had_speech = True
+                self._vad.mark_utterance_active()
                 self._turn_t0 = time.time()
                 logger.info(
                     "[pipeline][%s] ② 检测到有效语音，开始送入 ASR",
@@ -193,39 +171,25 @@ class Session:
 
     async def _silence_watchdog_loop(self):
         """检查：① 说完静音 → 送 LLM；② 长期无语音 → goodbye。"""
-        try:
-            while self._listening and self._asr is not None:
-                await asyncio.sleep(0.3)
-                if not self._listening or self._responding or self._asr is None:
-                    break
-                now = time.time()
-                if (
-                    self._utterance_had_speech
-                    and self._utterance_quiet_since is not None
-                    and not self._utterance_finalizing
-                    and now - self._utterance_quiet_since >= config.UTTERANCE_END_SILENCE_SEC
-                ):
-                    await self._finalize_utterance()
-                    break
-                if self._quiet_since is None:
-                    continue
-                if now - self._quiet_since >= config.SILENCE_TIMEOUT_SEC:
-                    await self._on_silence_timeout()
-                    break
-        except asyncio.CancelledError:
-            pass
+        await silence_watchdog_loop(
+            self._vad,
+            should_run=lambda: self._listening and self._asr is not None and not self._utterance_finalizing,
+            is_busy=lambda: self._responding,
+            on_idle_timeout=self._on_silence_timeout,
+            on_utterance_end=self._finalize_utterance,
+        )
 
     async def _finalize_utterance(self):
         """VAD 判定用户说完：停止 ASR，用最新识别文本送 LLM。"""
         async with self._turn_lock:
             if self._responding or not self._listening or self._utterance_finalizing:
                 return
-            if not self._utterance_had_speech:
+            if not self._vad.utterance_had_speech:
                 return
             self._utterance_finalizing = True
             partial = self._last_asr_partial.strip()
 
-        quiet = time.time() - (self._utterance_quiet_since or time.time())
+        quiet = self._vad.utterance_quiet_sec
         logger.info(
             "[pipeline][%s] ②→③ 说完静音 %.1fs，结束 ASR（partial=%s）",
             self.session_id,
@@ -241,32 +205,25 @@ class Session:
                 return
 
         if partial:
-            async with self._turn_lock:
-                self._empty_utterance_streak = 0
+            self._empty_turns.note_text()
             await self._on_user_final(partial)
         else:
             async with self._turn_lock:
-                self._empty_utterance_streak += 1
-                streak = self._empty_utterance_streak
                 self._utterance_finalizing = False
-                self._utterance_had_speech = False
-                self._utterance_quiet_since = None
+                self._vad.clear_utterance()
                 self._asr_feed_logged = False
                 self._last_asr_partial = ""
 
-            if streak >= config.EMPTY_UTTERANCE_LIMIT:
+            if self._empty_turns.note_empty(reason="VAD说完但ASR无文本"):
                 logger.info(
-                    "[%s] 连续 %d 次说完但无识别文本，视为静音，通知设备 idle",
+                    "[%s] 连续空转达上限，通知设备 idle",
                     self.session_id,
-                    streak,
                 )
                 await self._send_idle_goodbye()
             else:
                 logger.info(
-                    "[%s] 说完但无识别文本 (%d/%d)，重新开启 ASR",
+                    "[%s] 说完但无识别文本，重新开启 ASR",
                     self.session_id,
-                    streak,
-                    config.EMPTY_UTTERANCE_LIMIT,
                 )
                 await self._reopen_asr()
 
@@ -275,9 +232,7 @@ class Session:
         async with self._turn_lock:
             if self._responding or not self._listening:
                 return
-            if self._quiet_since is None:
-                return
-            if time.time() - self._quiet_since < config.SILENCE_TIMEOUT_SEC:
+            if not self._vad.idle_timeout_due():
                 return
             # 注意：不能在这里 _stop_silence_watchdog()——本函数运行在 watchdog 任务内，cancel 会中断自身
             self._silence_closing = True
@@ -394,15 +349,11 @@ class Session:
         self._responding = False
         self._cancel = False
         self._silence_closing = False
-        self._quiet_since = time.time()
-        self._consecutive_speech_frames = 0
-        self._rms_log_counter = 0
+        self._vad.reset(mark_quiet_now=True)
         self._asr_feed_logged = False
-        self._utterance_had_speech = False
-        self._utterance_quiet_since = None
         self._last_asr_partial = ""
         self._utterance_finalizing = False
-        self._empty_utterance_streak = 0
+        self._empty_turns.reset()
         self._error_notified = False
         if self._save_pcm is not None:
             self._save_pcm = bytearray()
@@ -468,14 +419,10 @@ class Session:
         self._stop_asr()  # 停止 ASR 会触发最后一次识别结果（通过回调）
 
     def _start_silence_watchdog(self):
-        self._stop_silence_watchdog()
-        self._silence_watchdog = asyncio.create_task(self._silence_watchdog_loop())
+        self._silence_watchdog.start(self._silence_watchdog_loop())
 
     def _stop_silence_watchdog(self):
-        task = self._silence_watchdog
-        if task is not None and not task.done():
-            task.cancel()
-        self._silence_watchdog = None
+        self._silence_watchdog.stop()
 
     def _stop_asr(self):
         if self._asr is not None:
@@ -509,7 +456,7 @@ class Session:
                     text,
                 )
                 self._silence_closing = False
-            self._empty_utterance_streak = 0
+            self._empty_turns.note_text()
             self._responding = True
             self._listening = False
             self._stop_silence_watchdog()

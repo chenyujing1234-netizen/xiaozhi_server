@@ -102,8 +102,17 @@ class Config:
     SPEECH_FRAMES_REQUIRED = int(os.getenv("SPEECH_FRAMES_REQUIRED", "3"))
     # 用户说完后，VAD 连续静音多少秒即认为一句话结束并送 LLM（不等待云端语义断句）
     UTTERANCE_END_SILENCE_SEC = float(os.getenv("UTTERANCE_END_SILENCE_SEC", "2"))
-    # 连续多少次「VAD 有语音但 ASR 无文本」→ 视为环境噪声，下发 goodbye 退出聆听
+    # 连续多少次「有输入迹象但无有效文本」→ 视为环境噪声，下发 goodbye 退出聆听
+    # 默认通道：VAD 说完但 ASR 无文本；英语通道：音频已送 Omni 但无用户转写
     EMPTY_UTTERANCE_LIMIT = int(os.getenv("EMPTY_UTTERANCE_LIMIT", "3"))
+    # 英语：本地 VAD 判定说完后，等待 Omni 用户转写的最长时间（秒），超时计 1 次空转
+    EMPTY_OMNI_TRANSCRIPT_TIMEOUT_SEC = float(
+        os.getenv("EMPTY_OMNI_TRANSCRIPT_TIMEOUT_SEC", "8")
+    )
+    # 英语：持续向 Omni 送「有效语音」却一直无用户转写（噪声/server_vad 不收尾）的最长时间
+    EMPTY_OMNI_SPEECH_NO_TEXT_SEC = float(
+        os.getenv("EMPTY_OMNI_SPEECH_NO_TEXT_SEC", "10")
+    )
 
     # 流式 LLM → TTS：累计多少字且遇到逗号/句号等软标点时，先合成并下发首段音频
     TTS_SPLIT_MIN_CHARS = int(os.getenv("TTS_SPLIT_MIN_CHARS", "10"))
@@ -112,6 +121,8 @@ class Config:
     LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
     # 是否在日志中打印上行音频 RMS 能量（约每秒 1 条，用于调 VAD 阈值）
     LOG_AUDIO_RMS = os.getenv("LOG_AUDIO_RMS", "0") == "1"
+    # 英语通道上行 RMS（默认开；设 ENGLISH_LOG_AUDIO_RMS=0 关闭）
+    ENGLISH_LOG_AUDIO_RMS = os.getenv("ENGLISH_LOG_AUDIO_RMS", "1") == "1"
     # 是否把每段对话的音频保存到 saved_audio/ 目录（上行解码后的 wav）
     SAVE_AUDIO = os.getenv("SAVE_AUDIO", "0") == "1"
     SAVE_AUDIO_DIR = os.getenv("SAVE_AUDIO_DIR", "saved_audio")
@@ -144,6 +155,11 @@ class Config:
         "If the profile asks for strict correction, be more thorough but still keep a warm tone. "
         "If the profile asks for English-only, explain corrections in simple English instead of Chinese. "
         "When the student asks for a story or detailed help, finish the content; do not stop after an intro. "
+        "If a photo or image is provided in this turn, you can see it: "
+        "briefly name what you see in simple Chinese or English per the profile, "
+        "teach useful English words or short phrases for objects in the photo, "
+        "and invite the student to describe the picture in English. "
+        "When they describe the photo, help with vocabulary and correct key mistakes. "
         "Keep replies natural for voice. Do not use markdown, bullet points, or emoji.",
     )
     # Omni Realtime WebSocket（国内默认 endpoint）
@@ -173,6 +189,19 @@ class Config:
     MYSQL_PASSWORD = os.getenv("MYSQL_PASSWORD", "Centerm1@")
     MYSQL_DATABASE = os.getenv("MYSQL_DATABASE", "xiaozhi_server")
     MYSQL_CHARSET = os.getenv("MYSQL_CHARSET", "utf8mb4")
+
+    # ---- SpeakPal 用户登录（对齐 huanDa：微信 openid / 手机号短信）----
+    # 密钥请放到 .env，勿写入仓库默认值
+    JWT_SECRET = os.getenv("JWT_SECRET", "speakpal-jwt-secret-2026-change-me-32b")
+    JWT_EXPIRE_DAYS = int(os.getenv("JWT_EXPIRE_DAYS", "30"))
+    WX_APPID = os.getenv("WX_APPID", "")
+    WX_SECRET = os.getenv("WX_SECRET", "")
+    ALIYUN_ACCESS_KEY_ID = os.getenv("ALIYUN_ACCESS_KEY_ID", "")
+    ALIYUN_ACCESS_KEY_SECRET = os.getenv("ALIYUN_ACCESS_KEY_SECRET", "")
+    SMS_SIGN_NAME = os.getenv("SMS_SIGN_NAME", "哈希流光")
+    SMS_TEMPLATE_CODE = os.getenv("SMS_TEMPLATE_CODE", "SMS_495955218")
+    # 开发时可设 AUTH_SMS_DEBUG=1，短信失败仍返回成功并把验证码打日志
+    AUTH_SMS_DEBUG = os.getenv("AUTH_SMS_DEBUG", "0") == "1"
 
     @property
     def english_ws_url_for_device(self) -> str:

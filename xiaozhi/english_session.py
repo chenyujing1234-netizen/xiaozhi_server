@@ -22,7 +22,12 @@ from dashscope.audio.qwen_omni import (
 )
 
 from config import config
-from .audio_utils import is_speech
+from .silence_vad import (
+    EmptyTurnTracker,
+    SilenceGate,
+    WatchdogTask,
+    silence_watchdog_loop,
+)
 from .english_diagnosis import diagnose_turn
 from .english_history import (
     format_history_context,
@@ -44,6 +49,10 @@ ERROR_SPEECH = "Sorry, the server encountered an error. The connection will clos
 MAX_ERROR_DETAIL_LEN = 200
 # Web 按住说话：至少约 180ms 有效 PCM 才允许 commit（3 帧 × 60ms）
 MIN_WEB_OMNI_PCM_BYTES = 5760
+# Omni 要求图片 Base64 后不超过 256KB；留一点余量
+MAX_IMAGE_B64_LEN = 250_000
+# 送图前先喂一小段静音（API：必须先有至少一次音频）
+IMAGE_SEED_SILENCE_BYTES = 6400  # 16kHz mono s16le ≈ 200ms
 
 
 class _OmniBridge(OmniRealtimeCallback):
@@ -91,9 +100,23 @@ class EnglishSession:
         self._audio_task: Optional[asyncio.Task] = None
         self._turn_lock = asyncio.Lock()
         self._omni_lock = asyncio.Lock()
-        self._quiet_since: Optional[float] = None
-        self._consecutive_speech_frames: int = 0
-        self._silence_watchdog: Optional[asyncio.Task] = None
+        self._vad = SilenceGate(
+            channel="english",
+            session_id=self.session_id,
+            log_enabled=config.ENGLISH_LOG_AUDIO_RMS,
+            track_utterance=True,  # 本地句末静音后等待 Omni 转写
+        )
+        self._silence_watchdog = WatchdogTask()
+        self._empty_turns = EmptyTurnTracker(
+            channel="english", session_id=self.session_id,
+        )
+        self._uplink_drop_log_counter: int = 0
+        # 本轮 Omni 是否已出用户转写；本地句末后等待 Omni 的起点
+        self._omni_turn_has_user_text = False
+        self._pending_omni_transcript_since = None
+        # 持续 speech=True 向 Omni 送音频、却一直无转写的起点（噪声场景）
+        self._speech_no_text_since: Optional[float] = None
+        self._no_text_log_at_sec: int = -1
         # Web 测试页走裸 PCM，避免浏览器端 Opus 编解码
         self._web_pcm_mode = False
         self._web_pcm_carry = b""
@@ -112,6 +135,9 @@ class EnglishSession:
         self._profile_task: Optional[asyncio.Task] = None
         self._history_task: Optional[asyncio.Task] = None
         self._diagnosis_task: Optional[asyncio.Task] = None
+        # Web 看图学英语：会话内保留一张待注入图片（每轮 listen 重新 append）
+        self._pending_image_b64: Optional[str] = None
+        self._image_injected = False
 
     # ---------------- 消息分发 ----------------
 
@@ -122,7 +148,15 @@ class EnglishSession:
             logger.warning("收到非法 JSON: %s", raw[:200])
             return
         msg_type = msg.get("type")
-        logger.info("[recv][english][%s] %s", self.session_id, raw[:300])
+        # 图片 base64 很长，日志只打类型与长度
+        if msg_type == "image":
+            data = msg.get("data") or ""
+            logger.info(
+                "[recv][english][%s] image format=%s b64_len=%d",
+                self.session_id, msg.get("format"), len(data),
+            )
+        else:
+            logger.info("[recv][english][%s] %s", self.session_id, raw[:300])
 
         if msg_type == "hello":
             await self._on_hello(msg)
@@ -130,6 +164,10 @@ class EnglishSession:
             await self._on_listen(msg)
         elif msg_type == "abort":
             await self._on_abort(msg)
+        elif msg_type == "image":
+            await self._on_image(msg)
+        elif msg_type == "image_clear":
+            await self._on_image_clear()
         elif msg_type == "goodbye":
             await self._close_turn()
         elif msg_type == "mcp":
@@ -139,11 +177,22 @@ class EnglishSession:
 
     def handle_binary(self, data: bytes):
         if not self._listening or self._speaking or not self._uplink_open:
+            self._uplink_drop_log_counter += 1
+            if self._uplink_drop_log_counter == 1 or self._uplink_drop_log_counter % 50 == 0:
+                logger.info(
+                    "[english][%s] 丢弃上行音频帧 #%d listening=%s speaking=%s uplink_open=%s opus_len=%d",
+                    self.session_id,
+                    self._uplink_drop_log_counter,
+                    self._listening,
+                    self._speaking,
+                    self._uplink_open,
+                    len(data or b""),
+                )
             return
         try:
             self._audio_queue.put_nowait(data)
         except asyncio.QueueFull:
-            pass
+            logger.warning("[english][%s] 上行音频队列已满，丢帧", self.session_id)
 
     async def _audio_consumer(self):
         while True:
@@ -155,8 +204,56 @@ class EnglishSession:
             pcm = data if self._web_pcm_mode else self.decoder.decode(data)
             if not pcm:
                 continue
-            self._update_vad(pcm)
-            await self._feed_pcm_to_omni(pcm)
+            result = self._vad.on_frame(pcm)
+            if result.active_speech:
+                self._vad.mark_utterance_active()
+                # 句末等待中又开口：取消「静音后等转写」，改走「持续语音无转写」计时
+                if self._pending_omni_transcript_since is not None:
+                    self._pending_omni_transcript_since = None
+                if (
+                    not self._omni_turn_has_user_text
+                    and self._speech_no_text_since is None
+                ):
+                    self._speech_no_text_since = time.time()
+                    self._no_text_log_at_sec = -1
+                    logger.info(
+                        "[english][%s] 开始向 Omni 送有效语音，尚无用户转写"
+                        "（持续 %.0fs 无转写将计空转）",
+                        self.session_id,
+                        config.EMPTY_OMNI_SPEECH_NO_TEXT_SEC,
+                    )
+            if result.frame_count == 1:
+                logger.info(
+                    "[english][%s] 收到首帧上行音频 opus/pcm_len=%d pcm=%dB RMS=%.0f 阈值=%.0f",
+                    self.session_id,
+                    len(data),
+                    len(pcm),
+                    result.rms,
+                    config.SPEECH_RMS_THRESHOLD,
+                )
+            fed = await self._feed_pcm_to_omni(pcm)
+            # 与 RMS 日志同频：提醒「在送音频但 Omni 仍无用户文本」
+            if (
+                fed
+                and not self._omni_turn_has_user_text
+                and result.frame_count % 17 == 0
+            ):
+                speech_wait = (
+                    time.time() - self._speech_no_text_since
+                    if self._speech_no_text_since is not None
+                    else 0.0
+                )
+                logger.info(
+                    "[english][%s] 已送Omni音频 #%d pcm_bytes=%d RMS=%.0f "
+                    "speech=%s 尚无用户转写 已持续语音无文本=%.1fs/%.0fs",
+                    self.session_id,
+                    result.frame_count,
+                    self._omni_pcm_bytes,
+                    result.rms,
+                    result.active_speech,
+                    speech_wait,
+                    config.EMPTY_OMNI_SPEECH_NO_TEXT_SEC,
+                )
 
     async def _feed_pcm_to_omni(self, pcm: bytes) -> bool:
         if not pcm or self._omni is None:
@@ -170,62 +267,169 @@ class EnglishSession:
             logger.debug("喂 Omni 失败: %s", e)
             return False
 
-    def _update_vad(self, pcm: bytes):
-        """本地 VAD：用于静音超时，与 Omni server_vad 独立。"""
-        if is_speech(pcm, config.SPEECH_RMS_THRESHOLD):
-            self._consecutive_speech_frames += 1
-            if self._consecutive_speech_frames >= config.SPEECH_FRAMES_REQUIRED:
-                self._quiet_since = None
-        else:
-            if self._consecutive_speech_frames >= config.SPEECH_FRAMES_REQUIRED:
-                self._quiet_since = time.time()
-            self._consecutive_speech_frames = 0
-
     async def _silence_watchdog_loop(self):
-        try:
-            while self._listening:
-                await asyncio.sleep(0.3)
-                if not self._listening or self._speaking:
-                    continue
-                if self._quiet_since is None:
-                    continue
-                if time.time() - self._quiet_since >= config.SILENCE_TIMEOUT_SEC:
-                    await self._on_silence_timeout()
-                    break
-        except asyncio.CancelledError:
-            pass
+        await silence_watchdog_loop(
+            self._vad,
+            should_run=lambda: self._listening,
+            is_busy=lambda: self._speaking,
+            on_idle_timeout=self._on_silence_timeout,
+            on_utterance_end=self._on_local_utterance_quiet,
+            break_on_utterance_end=False,  # 继续等 Omni 转写 / 空转计数
+            on_tick=self._check_omni_empty_conditions,
+        )
+
+    async def _on_local_utterance_quiet(self):
+        """本地 VAD：有过有效语音后静音达到句末阈值 → 开始等 Omni 用户转写。"""
+        if self._omni_turn_has_user_text or self._speaking:
+            return
+        # 句末后改走「静音等待转写」；暂停「持续语音无转写」计时
+        self._speech_no_text_since = None
+        if self._pending_omni_transcript_since is not None:
+            return
+        self._pending_omni_transcript_since = time.time()
+        logger.info(
+            "[english][%s] 本地句末静音，等待 Omni 用户转写（超时 %.0fs 计空转）",
+            self.session_id,
+            config.EMPTY_OMNI_TRANSCRIPT_TIMEOUT_SEC,
+        )
+
+    async def _check_omni_empty_conditions(self) -> bool:
+        """两类空转：①句末后等转写超时 ②持续送语音却一直无转写。"""
+        if self._speaking or self._omni_turn_has_user_text:
+            return False
+
+        # ② 持续 speech、Omni 迟迟不给用户转写（你日志里的场景）
+        if self._speech_no_text_since is not None:
+            waited = time.time() - self._speech_no_text_since
+            waited_i = int(waited)
+            if waited_i != self._no_text_log_at_sec and waited_i > 0 and waited_i % 2 == 0:
+                self._no_text_log_at_sec = waited_i
+                logger.info(
+                    "[english][%s] 持续向Omni送语音 %.1fs 仍无用户转写 "
+                    "pcm_bytes=%d 空转=%d/%d（阈值 %.0fs）",
+                    self.session_id,
+                    waited,
+                    self._omni_pcm_bytes,
+                    self._empty_turns.streak,
+                    self._empty_turns.limit,
+                    config.EMPTY_OMNI_SPEECH_NO_TEXT_SEC,
+                )
+            if waited >= config.EMPTY_OMNI_SPEECH_NO_TEXT_SEC:
+                logger.info(
+                    "[english][%s] 判定：已送Omni有效语音 %.1fs 但无用户转写 → 计空转",
+                    self.session_id,
+                    waited,
+                )
+                # 重置窗口，便于连续噪声下累计多次空转
+                self._speech_no_text_since = time.time()
+                self._no_text_log_at_sec = -1
+                self._vad.clear_utterance()
+                if self._empty_turns.note_empty(
+                    reason=f"持续送语音{waited:.1f}s无Omni转写"
+                ):
+                    await self._send_idle_goodbye()
+                    return True
+
+        # ① 句末静音后等待 Omni 转写超时
+        if self._pending_omni_transcript_since is None:
+            return False
+        waited = time.time() - self._pending_omni_transcript_since
+        if waited < config.EMPTY_OMNI_TRANSCRIPT_TIMEOUT_SEC:
+            return False
+        self._pending_omni_transcript_since = None
+        self._vad.clear_utterance()
+        logger.info(
+            "[english][%s] 判定：句末后等待Omni转写 %.1fs 仍无文本 → 计空转",
+            self.session_id,
+            waited,
+        )
+        if self._empty_turns.note_empty(
+            reason=f"等待Omni转写超时{waited:.1f}s"
+        ):
+            await self._send_idle_goodbye()
+            return True
+        return False
 
     async def _on_silence_timeout(self):
         if self._speaking or not self._listening:
             return
-        if self._quiet_since is None:
-            return
-        if time.time() - self._quiet_since < config.SILENCE_TIMEOUT_SEC:
+        if not self._vad.idle_timeout_due():
             return
 
         logger.info(
-            "[english][%s] 静音超时 %.0fs，关闭 Omni 并通知设备退出聆听",
+            "[english][%s] 静音超时 %.1fs（阈值 %.0fs），上行帧=%d 低RMS连续=%d，"
+            "关闭 Omni 并下发 goodbye→idle",
             self.session_id,
+            self._vad.quiet_sec,
             config.SILENCE_TIMEOUT_SEC,
+            self._vad.frame_count,
+            self._vad.low_rms_frames,
         )
+        await self._send_idle_goodbye()
+
+    async def _send_idle_goodbye(self):
+        """下发 goodbye，让设备退出聆听回到 idle。
+
+        注意：可能从 watchdog 回调同步 await 进来——先发 goodbye，再关 Omni；
+        且不得 cancel 当前 watchdog 任务，否则 goodbye 发不出去。
+        """
+        already_idle = (not self._listening) and (not self._uplink_open)
         self._listening = False
-        self._stop_silence_watchdog()
+        self._uplink_open = False
+        self._pending_omni_transcript_since = None
+        self._speech_no_text_since = None
+        self._no_text_log_at_sec = -1
         self._stop_audio_consumer()
-        await self._close_omni()
+        # 先通知设备回 idle，再清理 Omni（避免 close 耗时/异常导致 MCU 一直聆听）
         try:
             await self._send_json({"type": "goodbye"})
+            logger.info(
+                "[english][%s] 已下发 goodbye（设备应回 idle） already_idle=%s",
+                self.session_id,
+                already_idle,
+            )
         except Exception as e:  # noqa: BLE001
-            logger.warning("[english] 发送 goodbye 失败: %s", e)
+            logger.warning("[english][%s] 发送 goodbye 失败: %s", self.session_id, e)
+        self._silence_watchdog.stop()
+        try:
+            await self._close_omni()
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[english][%s] idle 时关闭 Omni 失败: %s", self.session_id, e)
+
+    def _note_omni_user_text(self, text: str):
+        """Omni 产出用户转写（有效文本）。"""
+        self._omni_turn_has_user_text = True
+        self._pending_omni_transcript_since = None
+        self._speech_no_text_since = None
+        self._no_text_log_at_sec = -1
+        self._empty_turns.note_text()
+        self._vad.clear_utterance()
+        logger.info(
+            "[english][%s] Omni用户转写=有效 text=%r 空转计数已清零",
+            self.session_id,
+            (text or "")[:120],
+        )
+
+    async def _note_omni_empty_turn(self, *, reason: str):
+        """Omni 一轮结束但无用户文本 → 空转计数。"""
+        self._pending_omni_transcript_since = None
+        self._speech_no_text_since = None
+        self._no_text_log_at_sec = -1
+        self._vad.clear_utterance()
+        self._omni_turn_has_user_text = False
+        logger.info(
+            "[english][%s] Omni用户转写=无效/缺失 reason=%s",
+            self.session_id,
+            reason,
+        )
+        if self._empty_turns.note_empty(reason=reason):
+            await self._send_idle_goodbye()
 
     def _start_silence_watchdog(self):
-        self._stop_silence_watchdog()
-        self._silence_watchdog = asyncio.create_task(self._silence_watchdog_loop())
+        self._silence_watchdog.start(self._silence_watchdog_loop())
 
     def _stop_silence_watchdog(self):
-        task = self._silence_watchdog
-        if task is not None and not task.done():
-            task.cancel()
-        self._silence_watchdog = None
+        self._silence_watchdog.stop()
 
     async def _on_hello(self, msg: dict):
         audio = msg.get("audio_params") or {}
@@ -273,6 +477,92 @@ class EnglishSession:
         self._cancel = False
         logger.info("[english][%s] abort 处理完成", self.session_id)
 
+    async def _on_image(self, msg: dict):
+        """Web 端上传看图练英语的 JPEG（Base64）。"""
+        data = (msg.get("data") or "").strip()
+        if data.startswith("data:") and "," in data:
+            data = data.split(",", 1)[1]
+        data = "".join(data.split())  # 去掉换行/空白
+        if not data:
+            await self._send_json({
+                "type": "image_ack", "ok": False, "message": "图片数据为空",
+            })
+            return
+        if len(data) > MAX_IMAGE_B64_LEN:
+            await self._send_json({
+                "type": "image_ack",
+                "ok": False,
+                "message": "图片太大，请压缩后再试（建议小于 180KB）",
+            })
+            return
+        # 粗校验：能否解码
+        try:
+            raw = base64.b64decode(data, validate=False)
+        except Exception:  # noqa: BLE001
+            await self._send_json({
+                "type": "image_ack", "ok": False, "message": "图片编码无效",
+            })
+            return
+        if len(raw) < 100:
+            await self._send_json({
+                "type": "image_ack", "ok": False, "message": "图片无效",
+            })
+            return
+        # JPEG 魔数（也接受少数相机 HEIC 误传时给友好提示）
+        if not (raw[:2] == b"\xff\xd8"):
+            await self._send_json({
+                "type": "image_ack",
+                "ok": False,
+                "message": "请使用 JPEG 格式图片",
+            })
+            return
+
+        self._pending_image_b64 = data
+        self._image_injected = False
+        logger.info(
+            "[english][%s] 已保存待注入图片 raw=%dB b64=%d",
+            self.session_id, len(raw), len(data),
+        )
+        await self._send_json({
+            "type": "image_ack",
+            "ok": True,
+            "message": "图片已添加，按住说话开始看图练英语",
+        })
+
+    async def _on_image_clear(self):
+        self._pending_image_b64 = None
+        self._image_injected = False
+        await self._send_json({"type": "image_ack", "ok": True, "cleared": True})
+        logger.info("[english][%s] 已清除会话图片", self.session_id)
+
+    async def _inject_pending_image(self, *, seed_silence: bool = True, force: bool = False):
+        """向 Omni 注入图片。开场可带静音种子；commit 前应再 force 注入一次。"""
+        if not self._pending_image_b64 or self._omni is None:
+            return False
+        if self._image_injected and not force:
+            return True
+        try:
+            if seed_silence and not self._image_injected:
+                silence = b"\x00" * IMAGE_SEED_SILENCE_BYTES
+                await self._feed_pcm_to_omni(silence)
+            await self.loop.run_in_executor(
+                None, self._omni.append_video, self._pending_image_b64
+            )
+            self._image_injected = True
+            logger.info(
+                "[english][%s] 已向 Omni 注入看图帧 force=%s seed=%s b64=%d",
+                self.session_id, force, seed_silence, len(self._pending_image_b64),
+            )
+            return True
+        except Exception as e:  # noqa: BLE001
+            logger.warning("[english][%s] 注入图片失败: %s", self.session_id, e)
+            await self._send_json({
+                "type": "image_ack",
+                "ok": False,
+                "message": f"图片发送失败: {e}",
+            })
+            return False
+
     async def _start_listening(self):
         if self._speaking:
             logger.info("[english][%s] 仍在播放，忽略 listen start", self.session_id)
@@ -285,21 +575,32 @@ class EnglishSession:
         self._speaking = False
         self._cancel = False
         self._error_notified = False
-        self._quiet_since = time.time()
-        self._consecutive_speech_frames = 0
+        self._vad.reset(mark_quiet_now=True)
+        self._empty_turns.reset()
+        self._omni_turn_has_user_text = False
+        self._pending_omni_transcript_since = None
+        self._speech_no_text_since = None
+        self._no_text_log_at_sec = -1
+        self._uplink_drop_log_counter = 0
         self._uplink_open = True
         self._omni_pcm_bytes = 0
         self._user_turn_buf = ""
+        self._image_injected = False
 
         try:
             await self._open_omni()
+            await self._inject_pending_image()
             self._audio_task = asyncio.create_task(self._audio_consumer())
             self._start_silence_watchdog()
             logger.info(
-                "[english][%s] 开始聆听，Omni 已连接 model=%s voice=%s",
+                "[english][%s] 开始聆听，Omni 已连接 model=%s voice=%s has_image=%s "
+                "静音超时=%.0fs RMS阈值=%.0f",
                 self.session_id,
                 config.ENGLISH_OMNI_MODEL,
                 config.ENGLISH_OMNI_VOICE,
+                bool(self._pending_image_b64),
+                config.SILENCE_TIMEOUT_SEC,
+                config.SPEECH_RMS_THRESHOLD,
             )
         except Exception as e:  # noqa: BLE001
             logger.error("[english] 启动 Omni 失败: %s", e)
@@ -346,11 +647,14 @@ class EnglishSession:
             return
 
         try:
+            # commit 前再送一次图：避免仅开场注入时被 VAD/缓冲策略丢掉
+            if self._pending_image_b64:
+                await self._inject_pending_image(seed_silence=False, force=True)
             await self.loop.run_in_executor(None, self._omni.commit)
             await self.loop.run_in_executor(None, self._omni.create_response)
             logger.info(
-                "[english][%s] Web 松手，已 commit + create_response（%d bytes），等待 Omni 回复",
-                self.session_id, self._omni_pcm_bytes,
+                "[english][%s] Web 松手，已 commit + create_response（%d bytes）has_image=%s，等待 Omni 回复",
+                self.session_id, self._omni_pcm_bytes, bool(self._pending_image_b64),
             )
         except Exception as e:  # noqa: BLE001
             err = str(e).lower()
@@ -371,10 +675,19 @@ class EnglishSession:
             return ""
 
     def _build_session_instructions(self) -> str:
-        return build_instructions(
+        text = build_instructions(
             self._profile,
             history_context=self._history_context,
         )
+        if self._pending_image_b64:
+            text += (
+                "\n\nPHOTO CONTEXT: The student has attached a photo for this turn. "
+                "You WILL receive the image in the multimodal input. "
+                "You can see the photo. Do not say you cannot see it. "
+                "Describe or discuss what is actually in the image, teach useful English words, "
+                "and help the student talk about the photo."
+            )
+        return text
 
     async def _open_omni(self):
         self._profile = get_store().get(self.device_id)
@@ -390,13 +703,16 @@ class EnglishSession:
         )
         await self.loop.run_in_executor(None, conv.connect)
 
+        # Web 按住说话走手动 commit；开着 server_vad 容易抢先提交，导致看图帧丢失
+        use_server_vad = not self._web_pcm_mode
+
         def _configure():
             conv.update_session(
                 output_modalities=[MultiModality.AUDIO, MultiModality.TEXT],
                 voice=config.ENGLISH_OMNI_VOICE,
                 input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
                 output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
-                enable_turn_detection=True,
+                enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
             )
@@ -405,11 +721,12 @@ class EnglishSession:
         self._omni = conv
         hist_chars = len(self._history_context or "")
         logger.info(
-            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d text=%s",
+            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d vad=%s text=%s",
             self.session_id,
             self._profile.turn_count,
             self._profile.last_refine_turn,
             hist_chars,
+            "server_vad" if use_server_vad else "manual",
             (self._profile.profile_text or "")[:120],
         )
 
@@ -420,13 +737,15 @@ class EnglishSession:
             return
         instructions = self._build_session_instructions()
 
+        use_server_vad = not self._web_pcm_mode
+
         def _update():
             omni.update_session(
                 output_modalities=[MultiModality.AUDIO, MultiModality.TEXT],
                 voice=config.ENGLISH_OMNI_VOICE,
                 input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
                 output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
-                enable_turn_detection=True,
+                enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
             )
@@ -667,7 +986,17 @@ class EnglishSession:
                 self._tts_start_sent = False
 
             elif etype == "conversation.item.input_audio_transcription.completed":
-                text = event.get("transcript", "")
+                raw_tr = event.get("transcript")
+                text = (raw_tr or "").strip()
+                logger.info(
+                    "[english][%s] Omni返回用户转写 completed raw=%r stripped=%r 有效=%s",
+                    self.session_id,
+                    (raw_tr if isinstance(raw_tr, str) else raw_tr)[:160]
+                    if isinstance(raw_tr, str)
+                    else raw_tr,
+                    text[:160],
+                    bool(text),
+                )
                 if text:
                     full = self._append_user_transcript(text)
                     logger.info("[english][%s] 用户说: %s", self.session_id, full)
@@ -676,6 +1005,7 @@ class EnglishSession:
                     self._tutor_stream_buf = ""
                     self._tts_start_sent = False
                     self._turn_saved = False
+                    self._note_omni_user_text(full)
                     await self._send_json({
                         "type": "stt",
                         "text": full,
@@ -684,6 +1014,12 @@ class EnglishSession:
                     # 显式偏好：异步立刻沉淀画像，避免阻塞 Omni 事件循环
                     if looks_like_preference_request(full):
                         self._schedule_explicit_profile_refine(full)
+                else:
+                    logger.info(
+                        "[english][%s] Omni用户转写=空字符串（本轮尚不计空转，"
+                        "等 response.done / 等待超时再判定）",
+                        self.session_id,
+                    )
 
             elif etype == "response.audio.delta":
                 delta_b64 = event.get("delta", "")
@@ -714,10 +1050,31 @@ class EnglishSession:
                 if self._speaking:
                     await self._send_pcm_frames(b"", flush=True)
                 if etype == "response.done":
+                    # 只看本轮：勿用 _last_user_text（可能是上一轮残留）
+                    buf = (self._user_turn_buf or "").strip()
+                    had_user_text = self._omni_turn_has_user_text or bool(buf)
+                    logger.info(
+                        "[english][%s] response.done 判定本轮有效用户文本=%s "
+                        "flag=%s buf=%r",
+                        self.session_id,
+                        had_user_text,
+                        self._omni_turn_has_user_text,
+                        buf[:120],
+                    )
                     await self._finish_speaking()
-                    self._schedule_history_save()
-                    self._schedule_profile_update()
-                    self._schedule_diagnosis()
+                    if had_user_text:
+                        self._empty_turns.note_text()
+                        self._schedule_history_save()
+                        self._schedule_profile_update()
+                        self._schedule_diagnosis()
+                    else:
+                        # 音频进了 Omni、模型还回了 response，但没有用户转写 → 空转
+                        await self._note_omni_empty_turn(
+                            reason="response.done但无用户转写"
+                        )
+                    # 下一轮重新计数本轮用户文本
+                    self._omni_turn_has_user_text = False
+                    self._user_turn_buf = ""
 
             elif etype == "error":
                 err = event.get("error", {})
@@ -775,11 +1132,19 @@ class EnglishSession:
         self._speaking = False
         self._tts_start_sent = False
         if self._listening:
-            self._quiet_since = time.time()
-            self._consecutive_speech_frames = 0
+            # 导师说完：重新开始静音计时；MCU/Web 都要恢复 watchdog（原先仅 Web 会重启）
+            self._vad.mark_after_playback()
+            self._pending_omni_transcript_since = None
+            self._speech_no_text_since = None
+            self._no_text_log_at_sec = -1
+            self._omni_turn_has_user_text = False
             self._uplink_open = True
-            if self._web_pcm_mode:
-                self._start_silence_watchdog()
+            self._start_silence_watchdog()
+            logger.info(
+                "[english][%s] 播放结束，恢复聆听与静音计时（%.0fs 无有效语音将 goodbye→idle）",
+                self.session_id,
+                config.SILENCE_TIMEOUT_SEC,
+            )
 
     async def _cancel_speaking(self):
         self._cancel = True

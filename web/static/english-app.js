@@ -6,6 +6,10 @@
   var currentUserMsg = null;
   var currentTutorMsg = null;
   var toastTimer = null;
+  var connectTimeoutTimer = null;
+
+  var photoObjectUrl = null;
+  var photoUploading = false;
 
   var el = {
     statusDot: document.getElementById("status-dot"),
@@ -16,6 +20,11 @@
     btnTalk: document.getElementById("btn-talk"),
     btnTalkLabel: document.getElementById("btn-talk-label"),
     btnTalkHint: document.getElementById("btn-talk-hint"),
+    btnPhoto: document.getElementById("btn-photo"),
+    photoInput: document.getElementById("photo-input"),
+    photoBar: document.getElementById("photo-bar"),
+    photoThumb: document.getElementById("photo-thumb"),
+    btnPhotoClear: document.getElementById("btn-photo-clear"),
     overlay: document.getElementById("overlay"),
     overlayText: document.getElementById("overlay-text"),
     toast: document.getElementById("toast"),
@@ -122,7 +131,132 @@
       el.btnTalkLabel.textContent = "连接中…";
       el.btnTalkHint.textContent = "";
     }
-    el.btnTalk.disabled = !ready || state === "disabled";
+    el.btnTalk.disabled = !ready || state === "disabled" || photoUploading;
+    if (el.btnPhoto) {
+      el.btnPhoto.disabled = !ready || state === "recording" || state === "disabled" || photoUploading;
+    }
+  }
+
+  function addPhotoMsg(dataUrl) {
+    hideWelcome();
+    var wrap = document.createElement("div");
+    wrap.className = "msg photo";
+    var bubble = document.createElement("div");
+    bubble.className = "msg-bubble";
+    bubble.innerHTML = '<span class="msg-tag">我的照片</span>';
+    var img = document.createElement("img");
+    img.src = dataUrl;
+    img.alt = "看图练英语";
+    bubble.appendChild(img);
+    wrap.appendChild(bubble);
+    el.messages.appendChild(wrap);
+    scrollToBottom();
+  }
+
+  function showPhotoBar(dataUrl) {
+    if (photoObjectUrl) {
+      try { URL.revokeObjectURL(photoObjectUrl); } catch (e) { /* noop */ }
+      photoObjectUrl = null;
+    }
+    el.photoThumb.src = dataUrl;
+    el.photoBar.classList.remove("hidden");
+  }
+
+  function hidePhotoBar() {
+    el.photoBar.classList.add("hidden");
+    el.photoThumb.removeAttribute("src");
+    if (photoObjectUrl) {
+      try { URL.revokeObjectURL(photoObjectUrl); } catch (e) { /* noop */ }
+      photoObjectUrl = null;
+    }
+  }
+
+  function compressImageFile(file) {
+    return new Promise(function (resolve, reject) {
+      if (!file) {
+        reject(new Error("未选择文件"));
+        return;
+      }
+      var reader = new FileReader();
+      reader.onerror = function () { reject(new Error("读取图片失败")); };
+      reader.onload = function () {
+        var img = new Image();
+        img.onerror = function () { reject(new Error("图片无法解析")); };
+        img.onload = function () {
+          var maxSide = 960;
+          var w = img.width;
+          var h = img.height;
+          if (w > maxSide || h > maxSide) {
+            if (w >= h) {
+              h = Math.round(h * maxSide / w);
+              w = maxSide;
+            } else {
+              w = Math.round(w * maxSide / h);
+              h = maxSide;
+            }
+          }
+          var canvas = document.createElement("canvas");
+          canvas.width = w;
+          canvas.height = h;
+          var ctx = canvas.getContext("2d");
+          ctx.drawImage(img, 0, 0, w, h);
+
+          var qualities = [0.82, 0.72, 0.62, 0.52, 0.42];
+          var out = null;
+          for (var i = 0; i < qualities.length; i++) {
+            out = canvas.toDataURL("image/jpeg", qualities[i]);
+            var b64 = out.split(",")[1] || "";
+            // Omni 限制 Base64 后约 256KB，目标压到 180KB 以内
+            if (b64.length <= 180 * 1024) break;
+          }
+          var finalB64 = (out && out.split(",")[1]) || "";
+          if (!finalB64 || finalB64.length > 240 * 1024) {
+            reject(new Error("图片仍过大，请换一张更小的照片"));
+            return;
+          }
+          resolve(out);
+        };
+        img.src = reader.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  }
+
+  function bindPhotoControls() {
+    if (!el.btnPhoto || !el.photoInput) return;
+
+    el.btnPhoto.addEventListener("click", function () {
+      if (!ready || photoUploading) return;
+      el.photoInput.value = "";
+      el.photoInput.click();
+    });
+
+    el.photoInput.addEventListener("change", function () {
+      var file = el.photoInput.files && el.photoInput.files[0];
+      if (!file) return;
+      photoUploading = true;
+      setTalkUi("idle");
+      showToast("正在压缩图片…", 2000);
+      compressImageFile(file)
+        .then(function (dataUrl) {
+          addPhotoMsg(dataUrl);
+          showPhotoBar(dataUrl);
+          client.sendImage(dataUrl);
+        })
+        .catch(function (err) {
+          showToast(err.message || "处理图片失败", 3200);
+        })
+        .finally(function () {
+          photoUploading = false;
+          setTalkUi(client && client.speaking ? "speaking" : "idle");
+        });
+    });
+
+    el.btnPhotoClear.addEventListener("click", function () {
+      hidePhotoBar();
+      if (client) client.clearImage();
+      showToast("已清除图片", 1800);
+    });
   }
 
   function bindTalkButton() {
@@ -155,8 +289,48 @@
     btn.addEventListener("touchcancel", onRelease, { passive: false });
   }
 
-  function initClient() {
+  function clearConnectTimeout() {
+    if (connectTimeoutTimer) {
+      clearTimeout(connectTimeoutTimer);
+      connectTimeoutTimer = null;
+    }
+  }
+
+  function armConnectTimeout() {
+    clearConnectTimeout();
+    connectTimeoutTimer = setTimeout(function () {
+      if (!ready) {
+        showOverlay("连接超时，请检查网络后刷新页面重试");
+        setStatus("error", "连接超时");
+        showToast("若页面能打开但无法连接，可能是服务重启中，请稍后再试", 4000);
+      }
+    }, 15000);
+  }
+
+  function updateAccountButton() {
+    var btn = document.getElementById("btn-account");
+    if (!btn || !window.SpeakPalAuth) return;
+    var user = SpeakPalAuth.getUser();
+    if (!user) {
+      btn.classList.add("hidden");
+      return;
+    }
+    btn.classList.remove("hidden");
+    if (SpeakPalAuth.isWeChat) {
+      btn.textContent = "已登录";
+      btn.onclick = null;
+      return;
+    }
+    var label = user.phone ? String(user.phone).replace(/^(\d{3})\d{4}(\d{4})$/, "$1****$2") : "账号";
+    btn.textContent = label;
+    btn.onclick = function () {
+      if (confirm("确定退出登录吗？")) SpeakPalAuth.logout();
+    };
+  }
+
+  function initClient(deviceId) {
     client = new SpeakPalClient({
+      deviceId: deviceId,
       autoReconnect: true,
       callbacks: {
         connecting: function () {
@@ -164,17 +338,19 @@
           setStatus("", "连接中…");
           setTalkUi("disabled");
           showOverlay("正在连接 SpeakPal…");
+          armConnectTimeout();
         },
         connected: function () {
           setStatus("", "握手中…");
           showOverlay("正在准备对话…");
         },
         hello: function () {
+          clearConnectTimeout();
           ready = true;
           hideOverlay();
           setStatus("ready", "就绪");
           setTalkUi("idle");
-          showToast("已连接，按住下方按钮开始说英语", 2200);
+          showToast("已连接：可拍图或按住说话练英语", 2400);
         },
         disconnected: function () {
           ready = false;
@@ -183,6 +359,19 @@
           setStatus("error", "已断开，重连中…");
           setTalkUi("disabled");
           showOverlay("连接断开，正在重连…");
+        },
+        imageAck: function (obj) {
+          if (obj && obj.cleared) return;
+          if (obj && obj.ok) {
+            showToast(obj.message || "图片已添加，按住说话开始看图练英语", 2800);
+            setStatus("ready", "看图就绪");
+          } else {
+            hidePhotoBar();
+            showToast((obj && obj.message) || "图片上传失败", 3200);
+          }
+        },
+        imageSend: function () {
+          setStatus("busy", "上传图片…");
         },
         error: function (payload) {
           if (payload && payload.message) {
@@ -257,12 +446,32 @@
     });
 
     bindTalkButton();
+    bindPhotoControls();
     client.connect();
   }
 
+  async function boot() {
+    setStatus("", "待登录");
+    hideOverlay();
+    if (!window.SpeakPalAuth) {
+      showOverlay("登录模块加载失败，请刷新重试");
+      return;
+    }
+    var result = await SpeakPalAuth.ensureLogin({
+      toast: function (msg) { showToast(msg, 2600); },
+      onLoggedIn: function (payload) {
+        if (payload && payload.toast) showToast(payload.toast, 2200);
+      },
+    });
+    updateAccountButton();
+    showOverlay("正在连接 SpeakPal…");
+    setStatus("", "连接中…");
+    initClient(result.deviceId || SpeakPalAuth.getDeviceId());
+  }
+
   if (document.readyState === "loading") {
-    document.addEventListener("DOMContentLoaded", initClient);
+    document.addEventListener("DOMContentLoaded", boot);
   } else {
-    initClient();
+    boot();
   }
 })();

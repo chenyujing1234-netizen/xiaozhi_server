@@ -1,0 +1,22 @@
+[Unit]
+Description=LinkPal / SpeakPal xiaozhi_server (OTA + English Web + MQTT)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+WorkingDirectory=/home/chenyj/xiaozhi_server
+Environment=PUBLIC_HOST=124.221.115.174
+Environment=ENGLISH_WEB_DOMAIN=linkpal.cloud
+Environment=HTTPS_ENABLED=0
+Environment=ENGLISH_ENABLED=1
+Environment=TRANSPORT=mqtt
+# 密钥写入 /home/chenyj/xiaozhi_server/.env（勿提交仓库）
+EnvironmentFile=-/home/chenyj/xiaozhi_server/.env
+ExecStart=/home/chenyj/xiaozhi_server/.venv/bin/python /home/chenyj/xiaozhi_server/server.py
+Restart=always
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

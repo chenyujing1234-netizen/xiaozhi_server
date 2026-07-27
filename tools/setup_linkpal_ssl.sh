@@ -93,10 +93,11 @@ if [[ -z "${CERT_NAME}" || ! -d "/etc/letsencrypt/live/${CERT_NAME}" ]]; then
 fi
 
 echo "==> 部署完整 HTTPS nginx 配置（证书: ${CERT_NAME}）"
-sed "s|www.linkpal.cloud|${CERT_NAME}|g; s|linkpal.cloud|${DOMAIN}|g; s|www.${DOMAIN}|${WWW}|g" \
-  "${ROOT}/deploy/nginx/linkpal.cloud.conf" > "${NGINX_AVAILABLE}"
+WS_MAP="/etc/nginx/conf.d/websocket-map.conf"
+if [[ ! -f "${WS_MAP}" ]]; then
+  cp "${ROOT}/deploy/nginx/websocket-map.conf" "${WS_MAP}"
+fi
 
-# 若 cert 名就是 www.domain，上面 sed 可能重复替换；用实际路径再写一次
 cat > "${NGINX_AVAILABLE}" <<EOF
 server {
     listen 80;
@@ -135,13 +136,14 @@ server {
         proxy_pass http://127.0.0.1:8000;
         proxy_http_version 1.1;
         proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
+        proxy_set_header Connection \$connection_upgrade;
         proxy_set_header Host \$host;
         proxy_set_header X-Real-IP \$remote_addr;
         proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto \$scheme;
         proxy_read_timeout 86400s;
         proxy_send_timeout 86400s;
+        proxy_buffering off;
     }
 }
 EOF
@@ -151,9 +153,8 @@ systemctl reload nginx
 
 echo ""
 echo "=========================================="
-echo "  SpeakPal 正式入口已就绪"
-echo "  https://${DOMAIN}/english/"
-echo "  https://${DOMAIN}/speak/"
+echo "  LinkPal 官网: https://${DOMAIN}/"
+echo "  SpeakPal 口语: https://${DOMAIN}/english/"
 echo "  WSS: wss://${DOMAIN}/xiaozhi/english/v1/"
 echo "=========================================="
 echo ""

@@ -7,7 +7,7 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="format-detection" content="telephone=no">
   <title>SpeakPal 英语口语</title>
-  <link rel="stylesheet" href="/static/english-app.css">
+  <link rel="stylesheet" href="/static/english-app.css?v=20260727d">
 </head>
 <body>
   <div class="app" id="app">
@@ -19,19 +19,22 @@
           <p class="brand-sub">AI 英语口语陪练</p>
         </div>
       </div>
-      <div class="status-pill" id="status-pill">
-        <span class="status-dot" id="status-dot"></span>
-        <span id="status-text">连接中…</span>
+      <div class="topbar-right">
+        <button type="button" class="btn-account hidden" id="btn-account" aria-label="账号">账号</button>
+        <div class="status-pill" id="status-pill">
+          <span class="status-dot" id="status-dot"></span>
+          <span id="status-text">待登录</span>
+        </div>
       </div>
     </header>
 
     <main class="chat" id="chat-scroll">
       <div class="welcome" id="welcome-card">
-        <h2>开口就说，导师即时纠正</h2>
-        <p>按住下方按钮说英语。发现发音、用词或语法问题时，会用中文说明并示范正确说法。</p>
+        <h2>开口就说，也可拍图练英语</h2>
+        <p>按住下方按钮说英语；也可先拍照或选图，再对着图片用英语提问、描述。</p>
         <ul>
           <li>进入页面后自动连接，无需额外设置</li>
-          <li>微信内请允许麦克风权限</li>
+          <li>微信内请允许麦克风与相册/相机权限</li>
           <li>导师回复时，按住按钮即可打断</li>
         </ul>
       </div>
@@ -39,11 +42,26 @@
     </main>
 
     <footer class="dock">
-      <button type="button" class="btn-talk" id="btn-talk" disabled aria-label="按住说话">
-        <span class="btn-talk-icon" aria-hidden="true">🎙</span>
-        <span class="btn-talk-label" id="btn-talk-label">按住说话</span>
-        <span class="btn-talk-hint" id="btn-talk-hint">松开结束</span>
-      </button>
+      <div class="photo-bar hidden" id="photo-bar">
+        <img class="photo-thumb" id="photo-thumb" alt="已选图片">
+        <div class="photo-meta">
+          <span class="photo-label">看图练英语中</span>
+          <span class="photo-hint">按住说话，问图里有什么</span>
+        </div>
+        <button type="button" class="btn-photo-clear" id="btn-photo-clear" aria-label="清除图片">清除</button>
+      </div>
+      <div class="dock-actions">
+        <button type="button" class="btn-photo" id="btn-photo" disabled aria-label="拍照或选图">
+          <span aria-hidden="true">📷</span>
+          <span>拍图</span>
+        </button>
+        <button type="button" class="btn-talk" id="btn-talk" disabled aria-label="按住说话">
+          <span class="btn-talk-icon" aria-hidden="true">🎙</span>
+          <span class="btn-talk-label" id="btn-talk-label">按住说话</span>
+          <span class="btn-talk-hint" id="btn-talk-hint">松开结束</span>
+        </button>
+      </div>
+      <input type="file" id="photo-input" accept="image/*" capture="environment" hidden>
     </footer>
 
     <div class="overlay hidden" id="overlay">
@@ -53,10 +71,55 @@
       </div>
     </div>
 
+    <!-- 登录门禁：微信小程序 wx_code / 其它环境手机号 -->
+    <div class="login-overlay" id="login-modal">
+      <div class="login-card">
+        <div class="login-logo">
+          <div class="login-logo-mark">SP</div>
+          <div class="login-logo-text">SpeakPal</div>
+          <div class="login-slogan">登录后开始英语口语陪练</div>
+        </div>
+
+        <div id="wx-login-tip" class="wechat-login-tip hidden">
+          <div class="wechat-loading"><div class="wechat-spin"></div></div>
+          <p class="wechat-tip-text">正在通过微信自动登录…</p>
+          <p class="wechat-tip-sub">首次使用将自动创建账号</p>
+        </div>
+
+        <div id="wx-login-fail" class="wechat-login-tip hidden">
+          <p class="wechat-tip-text login-warn">微信自动登录失败</p>
+          <p class="wechat-tip-sub">请使用手机号登录继续</p>
+        </div>
+
+        <div id="phone-login-form" class="phone-login-form hidden">
+          <div class="login-form-title">手机号登录</div>
+          <div class="login-input-group">
+            <label class="login-label" for="login-phone">手机号</label>
+            <div class="login-input-wrap">
+              <span class="login-input-prefix">+86</span>
+              <input class="login-input" id="login-phone" type="tel" maxlength="11" placeholder="请输入手机号" autocomplete="tel">
+            </div>
+          </div>
+          <div class="login-input-group hidden" id="login-code-group">
+            <label class="login-label" for="login-code">验证码</label>
+            <div class="login-input-wrap">
+              <input class="login-input" id="login-code" type="tel" maxlength="6" placeholder="请输入 6 位验证码" inputmode="numeric">
+              <button type="button" class="resend-btn" id="btn-resend-code">重新发送</button>
+            </div>
+          </div>
+          <div class="login-error hidden" id="login-error"></div>
+          <button type="button" class="login-btn" id="btn-send-code" disabled>获取验证码</button>
+          <button type="button" class="login-btn hidden" id="btn-phone-login" disabled>登录</button>
+          <div class="login-agreement">登录即代表同意使用 SpeakPal 口语服务</div>
+        </div>
+      </div>
+    </div>
+
     <div class="toast hidden" id="toast"></div>
   </div>
 
-  <script src="/static/english-core.js"></script>
-  <script src="/static/english-app.js"></script>
+  <script src="/static/english-core.js?v=20260727d"></script>
+  <script src="/static/english-auth.js?v=20260727d"></script>
+  <script src="/static/english-app.js?v=20260727d"></script>
 </body>
 </html>
