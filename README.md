@@ -1,7 +1,17 @@
-# 小智 ESP32 自建服务端（Python）
+# 小智 ESP32 自建服务端（Python）· LinkPal / SpeakPal
 
 为 [xiaozhi-esp32](https://github.com/78/xiaozhi-esp32) 客户端配套开发的服务端，
 用来替代官方的 `mqtt.xiaozhi.me`，把语音助手的“大脑”放到你自己的服务器上。
+
+## 在线访问 / 试用
+
+| 入口 | 链接 | 说明 |
+|------|------|------|
+| **官网（LinkPal）** | https://linkpal.cloud/ | 产品介绍、硬件与部署说明 |
+| **英语口语练习（SpeakPal）** | https://linkpal.cloud/english/ | 网页版 AI 口语陪练，可直接试用 |
+| **短链** | https://linkpal.cloud/speak/ | 同上，便于分享 |
+
+> 浏览器打开 SpeakPal 后按提示登录（手机号验证码），允许麦克风即可开口练习；也支持看图练英语。
 
 整条链路：
 
