@@ -7,16 +7,22 @@
   <meta name="mobile-web-app-capable" content="yes">
   <meta name="format-detection" content="telephone=no">
   <title>SpeakPal 英语口语</title>
-  <link rel="stylesheet" href="/static/english-app.css?v=20260727d">
+  <link rel="stylesheet" href="/static/english-app.css?v=20260727f">
 </head>
 <body>
   <div class="app" id="app">
     <header class="topbar">
-      <div class="brand">
-        <span class="brand-mark">SP</span>
-        <div>
-          <h1>SpeakPal</h1>
-          <p class="brand-sub">AI 英语口语陪练</p>
+      <div class="topbar-left">
+        <a class="home-logo" href="/" title="返回语伴 LinkPal 官网" aria-label="返回语伴 LinkPal 官网">
+          <span class="home-logo-mark">LP</span>
+          <span class="home-logo-text">语伴 LinkPal</span>
+        </a>
+        <div class="brand">
+          <span class="brand-mark">SP</span>
+          <div>
+            <h1>SpeakPal</h1>
+            <p class="brand-sub">AI 英语口语陪练</p>
+          </div>
         </div>
       </div>
       <div class="topbar-right">
@@ -33,7 +39,7 @@
         <h2>开口就说，也可拍图练英语</h2>
         <p>按住下方按钮说英语；也可先拍照或选图，再对着图片用英语提问、描述。</p>
         <ul>
-          <li>进入页面后自动连接，无需额外设置</li>
+          <li>先浏览页面，点击下方按钮开始练习时再登录</li>
           <li>微信内请允许麦克风与相册/相机权限</li>
           <li>导师回复时，按住按钮即可打断</li>
         </ul>
@@ -71,9 +77,10 @@
       </div>
     </div>
 
-    <!-- 登录门禁：微信小程序 wx_code / 其它环境手机号 -->
-    <div class="login-overlay" id="login-modal">
+    <!-- 登录弹层：浏览页面不强制；点击对话/拍图等功能时再弹出 -->
+    <div class="login-overlay hidden" id="login-modal">
       <div class="login-card">
+        <button type="button" class="login-close" id="btn-login-close" aria-label="关闭">×</button>
         <div class="login-logo">
           <div class="login-logo-mark">SP</div>
           <div class="login-logo-text">SpeakPal</div>
@@ -118,8 +125,8 @@
     <div class="toast hidden" id="toast"></div>
   </div>
 
-  <script src="/static/english-core.js?v=20260727d"></script>
-  <script src="/static/english-auth.js?v=20260727d"></script>
-  <script src="/static/english-app.js?v=20260727d"></script>
+  <script src="/static/english-core.js?v=20260727f"></script>
+  <script src="/static/english-auth.js?v=20260727f"></script>
+  <script src="/static/english-app.js?v=20260727f"></script>
 </body>
 </html>

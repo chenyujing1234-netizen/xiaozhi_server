@@ -21,6 +21,8 @@
   var countdownTimer = null;
   var onLoggedIn = null;
   var loginInFlight = false;
+  var loginWaitResolve = null;
+  var formBound = false;
 
   function $(id) {
     return document.getElementById(id);
@@ -206,17 +208,32 @@
     if (login) login.disabled = !code || code.value.length < 6;
   }
 
+  function resolveLoginWait(result) {
+    if (typeof loginWaitResolve !== "function") return;
+    var resolve = loginWaitResolve;
+    loginWaitResolve = null;
+    resolve(result);
+  }
+
   function finishLogin(token, user, toastMsg) {
     saveLogin(token, user);
     hideLoginModal();
     setLoginError("");
+    var payload = { token: token, user: user, toast: toastMsg || "登录成功" };
+    resolveLoginWait({ ok: true, user: user, deviceId: getDeviceId() });
     if (typeof onLoggedIn === "function") {
       try {
-        onLoggedIn({ token: token, user: user, toast: toastMsg || "登录成功" });
+        onLoggedIn(payload);
       } catch (e) {
         console.warn("[SpeakPalAuth] onLoggedIn error", e);
       }
     }
+  }
+
+  function dismissLogin() {
+    hideLoginModal();
+    setLoginError("");
+    resolveLoginWait({ ok: false, cancelled: true });
   }
 
   async function sendCode() {
@@ -329,11 +346,15 @@
   }
 
   function bindLoginForm() {
+    if (formBound) return;
+    formBound = true;
     var phone = $("login-phone");
     var code = $("login-code");
     var sendBtn = $("btn-send-code");
     var resendBtn = $("btn-resend-code");
     var loginBtn = $("btn-phone-login");
+    var closeBtn = $("btn-login-close");
+    var modal = $("login-modal");
 
     if (phone) {
       phone.addEventListener("input", function () {
@@ -362,6 +383,27 @@
     if (sendBtn) sendBtn.addEventListener("click", sendCode);
     if (resendBtn) resendBtn.addEventListener("click", sendCode);
     if (loginBtn) loginBtn.addEventListener("click", doPhoneLogin);
+    if (closeBtn) closeBtn.addEventListener("click", dismissLogin);
+    if (modal) {
+      modal.addEventListener("click", function (ev) {
+        if (ev.target === modal) dismissLogin();
+      });
+    }
+  }
+
+  async function tryWxCodeLogin() {
+    var params = new URLSearchParams(global.location.search);
+    var wxCode = params.get("wx_code");
+    if (!wxCode) {
+      if (isWeChat) {
+        // 小程序未带 code：需要时再用手机号
+        state.wxLoginFailed = true;
+      }
+      return false;
+    }
+    var ok = await doWxLogin(wxCode);
+    stripWxCodeFromUrl();
+    return ok;
   }
 
   function stripWxCodeFromUrl() {
@@ -373,54 +415,72 @@
     } catch (e) { /* noop */ }
   }
 
+  function applyAuthOptions(options) {
+    options = options || {};
+    if (options.onLoggedIn) onLoggedIn = options.onLoggedIn;
+    if (options.toast) global.SpeakPalAuth._toast = options.toast;
+  }
+
   /**
-   * @param {{ onLoggedIn: Function, toast?: Function }} options
+   * 进页静默校验登录；未登录不弹窗，允许先浏览页面。
+   * @param {{ onLoggedIn?: Function, toast?: Function }} options
    * @returns {Promise<{ok:boolean, user?:object, deviceId?:string}>}
    */
-  async function ensureLogin(options) {
-    options = options || {};
-    onLoggedIn = options.onLoggedIn || null;
-    if (options.toast) global.SpeakPalAuth._toast = options.toast;
-
+  async function initAuth(options) {
+    applyAuthOptions(options);
     bindLoginForm();
+    hideLoginModal();
 
     if (await checkLogin()) {
+      return { ok: true, user: state.user, deviceId: getDeviceId() };
+    }
+
+    await tryWxCodeLogin();
+    if (isLoggedIn()) {
+      return { ok: true, user: state.user, deviceId: getDeviceId() };
+    }
+
+    hideLoginModal();
+    return { ok: false };
+  }
+
+  /**
+   * 使用功能前要求登录：弹出登录层并等待完成或取消。
+   * @param {{ onLoggedIn?: Function, toast?: Function }} options
+   * @returns {Promise<{ok:boolean, cancelled?:boolean, user?:object, deviceId?:string}>}
+   */
+  async function requireLogin(options) {
+    applyAuthOptions(options);
+    bindLoginForm();
+
+    if (isLoggedIn() || await checkLogin()) {
       hideLoginModal();
       return { ok: true, user: state.user, deviceId: getDeviceId() };
     }
 
-    showLoginModal();
-    var params = new URLSearchParams(global.location.search);
-    var wxCode = params.get("wx_code");
-
-    if (isWeChat) {
-      if (wxCode) {
-        await doWxLogin(wxCode);
-        stripWxCodeFromUrl();
-      } else {
-        // 小程序未带 code：回退手机号（与 huanDa 一致）
-        state.wxLoginFailed = true;
-        renderLoginUi();
-      }
-    } else if (wxCode) {
-      await doWxLogin(wxCode);
-      stripWxCodeFromUrl();
+    if (!isWeChat || state.wxLoginFailed) {
+      state.wxLoginFailed = true;
     }
+    setLoginError("");
+    showLoginModal();
+    renderLoginUi();
 
     if (isLoggedIn()) {
       return { ok: true, user: state.user, deviceId: getDeviceId() };
     }
 
-    // 等待用户完成手机号登录
     return new Promise(function (resolve) {
-      var prev = onLoggedIn;
-      onLoggedIn = function (payload) {
-        resolve({ ok: true, user: payload.user, deviceId: getDeviceId() });
-        if (typeof prev === "function") {
-          try { prev(payload); } catch (e) { console.warn(e); }
-        }
-      };
+      loginWaitResolve = resolve;
     });
+  }
+
+  /**
+   * 兼容旧调用：直接要求登录（不再作为进页门禁）。
+   */
+  async function ensureLogin(options) {
+    var silent = await initAuth(options);
+    if (silent.ok) return silent;
+    return requireLogin(options);
   }
 
   function logout() {
@@ -432,12 +492,15 @@
   }
 
   global.SpeakPalAuth = {
+    initAuth: initAuth,
+    requireLogin: requireLogin,
     ensureLogin: ensureLogin,
     isLoggedIn: isLoggedIn,
     getUser: function () { return state.user; },
     getToken: function () { return state.token; },
     getDeviceId: getDeviceId,
     logout: logout,
+    dismissLogin: dismissLogin,
     isWeChat: isWeChat,
     _toast: null,
   };

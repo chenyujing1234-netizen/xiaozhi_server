@@ -7,6 +7,9 @@
   var currentTutorMsg = null;
   var toastTimer = null;
   var connectTimeoutTimer = null;
+  var ensureSessionPromise = null;
+  var readyWaiters = [];
+  var controlsBound = false;
 
   var photoObjectUrl = null;
   var photoUploading = false;
@@ -115,7 +118,10 @@
   }
 
   function setTalkUi(state) {
-    // idle | recording | speaking | disabled
+    // idle | recording | speaking | disabled | guest
+    var loggedIn = !!(window.SpeakPalAuth && SpeakPalAuth.isLoggedIn());
+    var guest = !loggedIn;
+    var canUse = ready || guest;
     el.btnTalk.classList.toggle("recording", state === "recording");
     el.btnTalk.classList.toggle("speaking", state === "speaking");
     if (state === "recording") {
@@ -124,6 +130,9 @@
     } else if (state === "speaking") {
       el.btnTalkLabel.textContent = "按住停止";
       el.btnTalkHint.textContent = "打断导师回复";
+    } else if (guest) {
+      el.btnTalkLabel.textContent = "按住说话";
+      el.btnTalkHint.textContent = "开始练习需登录";
     } else if (ready) {
       el.btnTalkLabel.textContent = "按住说话";
       el.btnTalkHint.textContent = "松开结束";
@@ -131,10 +140,89 @@
       el.btnTalkLabel.textContent = "连接中…";
       el.btnTalkHint.textContent = "";
     }
-    el.btnTalk.disabled = !ready || state === "disabled" || photoUploading;
+    el.btnTalk.disabled = !canUse || state === "disabled" || photoUploading;
     if (el.btnPhoto) {
-      el.btnPhoto.disabled = !ready || state === "recording" || state === "disabled" || photoUploading;
+      el.btnPhoto.disabled = !canUse || state === "recording" || state === "disabled" || photoUploading;
     }
+  }
+
+  function enterGuestMode() {
+    ready = false;
+    hideOverlay();
+    setStatus("", "未登录");
+    setTalkUi("guest");
+  }
+
+  function notifyReadyWaiters() {
+    var waiters = readyWaiters.slice();
+    readyWaiters = [];
+    waiters.forEach(function (resolve) {
+      try { resolve(true); } catch (e) { /* noop */ }
+    });
+  }
+
+  function waitUntilReady(timeoutMs) {
+    if (ready) return Promise.resolve(true);
+    return new Promise(function (resolve) {
+      var done = false;
+      var timer = setTimeout(function () {
+        if (done) return;
+        done = true;
+        resolve(false);
+      }, timeoutMs || 20000);
+      readyWaiters.push(function (ok) {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        resolve(!!ok);
+      });
+    });
+  }
+
+  function authCallbacks() {
+    return {
+      toast: function (msg) { showToast(msg, 2600); },
+      onLoggedIn: function (payload) {
+        if (payload && payload.toast) showToast(payload.toast, 2200);
+        updateAccountButton();
+      },
+    };
+  }
+
+  async function ensureSession() {
+    if (ensureSessionPromise) return ensureSessionPromise;
+    ensureSessionPromise = (async function () {
+      if (!window.SpeakPalAuth) {
+        showToast("登录模块加载失败，请刷新重试", 3000);
+        return false;
+      }
+      if (!SpeakPalAuth.isLoggedIn()) {
+        var loginResult = await SpeakPalAuth.requireLogin(authCallbacks());
+        updateAccountButton();
+        if (!loginResult || !loginResult.ok) {
+          enterGuestMode();
+          return false;
+        }
+      }
+      if (!client) {
+        showOverlay("正在连接 SpeakPal…");
+        setStatus("", "连接中…");
+        setTalkUi("disabled");
+        initClient(SpeakPalAuth.getDeviceId());
+      }
+      if (!ready) {
+        showOverlay("正在连接 SpeakPal…");
+        var ok = await waitUntilReady(20000);
+        if (!ok) {
+          showToast("连接超时，请稍后重试", 3000);
+          return false;
+        }
+      }
+      return true;
+    })().finally(function () {
+      ensureSessionPromise = null;
+    });
+    return ensureSessionPromise;
   }
 
   function addPhotoMsg(dataUrl) {
@@ -222,50 +310,62 @@
     });
   }
 
-  function bindPhotoControls() {
-    if (!el.btnPhoto || !el.photoInput) return;
+  function bindControls() {
+    if (controlsBound) return;
+    controlsBound = true;
 
-    el.btnPhoto.addEventListener("click", function () {
-      if (!ready || photoUploading) return;
-      el.photoInput.value = "";
-      el.photoInput.click();
-    });
-
-    el.photoInput.addEventListener("change", function () {
-      var file = el.photoInput.files && el.photoInput.files[0];
-      if (!file) return;
-      photoUploading = true;
-      setTalkUi("idle");
-      showToast("正在压缩图片…", 2000);
-      compressImageFile(file)
-        .then(function (dataUrl) {
-          addPhotoMsg(dataUrl);
-          showPhotoBar(dataUrl);
-          client.sendImage(dataUrl);
-        })
-        .catch(function (err) {
-          showToast(err.message || "处理图片失败", 3200);
-        })
-        .finally(function () {
-          photoUploading = false;
-          setTalkUi(client && client.speaking ? "speaking" : "idle");
+    if (el.btnPhoto && el.photoInput) {
+      el.btnPhoto.addEventListener("click", function () {
+        if (photoUploading) return;
+        ensureSession().then(function (ok) {
+          if (!ok || !ready) return;
+          el.photoInput.value = "";
+          el.photoInput.click();
         });
-    });
+      });
 
-    el.btnPhotoClear.addEventListener("click", function () {
-      hidePhotoBar();
-      if (client) client.clearImage();
-      showToast("已清除图片", 1800);
-    });
-  }
+      el.photoInput.addEventListener("change", function () {
+        var file = el.photoInput.files && el.photoInput.files[0];
+        if (!file) return;
+        photoUploading = true;
+        setTalkUi("idle");
+        showToast("正在压缩图片…", 2000);
+        compressImageFile(file)
+          .then(function (dataUrl) {
+            addPhotoMsg(dataUrl);
+            showPhotoBar(dataUrl);
+            if (client) client.sendImage(dataUrl);
+          })
+          .catch(function (err) {
+            showToast(err.message || "处理图片失败", 3200);
+          })
+          .finally(function () {
+            photoUploading = false;
+            setTalkUi(client && client.speaking ? "speaking" : "idle");
+          });
+      });
+    }
 
-  function bindTalkButton() {
+    if (el.btnPhotoClear) {
+      el.btnPhotoClear.addEventListener("click", function () {
+        hidePhotoBar();
+        if (client) client.clearImage();
+        showToast("已清除图片", 1800);
+      });
+    }
+
     var btn = el.btnTalk;
+    if (!btn) return;
 
     function onPress(e) {
       if (e.type === "mousedown" && e.button !== 0) return;
       e.preventDefault();
-      if (!ready) return;
+      if (!window.SpeakPalAuth || !SpeakPalAuth.isLoggedIn() || !ready || !client) {
+        ensureSession().then(function (ok) {
+          if (ok) showToast("已就绪，请再次按住说话", 2200);
+        });
+        return;
+      }
       if (client.speaking) {
         client.abortPlayback();
         return;
@@ -276,7 +376,7 @@
 
     function onRelease(e) {
       e.preventDefault();
-      if (client.recording) client.stopTalk();
+      if (client && client.recording) client.stopTalk();
     }
 
     btn.addEventListener("mousedown", onPress);
@@ -311,11 +411,19 @@
     var btn = document.getElementById("btn-account");
     if (!btn || !window.SpeakPalAuth) return;
     var user = SpeakPalAuth.getUser();
-    if (!user) {
-      btn.classList.add("hidden");
+    btn.classList.remove("hidden");
+    if (!user || !SpeakPalAuth.isLoggedIn()) {
+      btn.textContent = "登录";
+      btn.onclick = function () {
+        SpeakPalAuth.requireLogin(authCallbacks()).then(function (result) {
+          updateAccountButton();
+          if (result && result.ok) {
+            ensureSession();
+          }
+        });
+      };
       return;
     }
-    btn.classList.remove("hidden");
     if (SpeakPalAuth.isWeChat) {
       btn.textContent = "已登录";
       btn.onclick = null;
@@ -350,6 +458,7 @@
           hideOverlay();
           setStatus("ready", "就绪");
           setTalkUi("idle");
+          notifyReadyWaiters();
           showToast("已连接：可拍图或按住说话练英语", 2400);
         },
         disconnected: function () {
@@ -445,28 +554,25 @@
       },
     });
 
-    bindTalkButton();
-    bindPhotoControls();
     client.connect();
   }
 
   async function boot() {
-    setStatus("", "待登录");
     hideOverlay();
+    bindControls();
     if (!window.SpeakPalAuth) {
       showOverlay("登录模块加载失败，请刷新重试");
       return;
     }
-    var result = await SpeakPalAuth.ensureLogin({
-      toast: function (msg) { showToast(msg, 2600); },
-      onLoggedIn: function (payload) {
-        if (payload && payload.toast) showToast(payload.toast, 2200);
-      },
-    });
+    var result = await SpeakPalAuth.initAuth(authCallbacks());
     updateAccountButton();
-    showOverlay("正在连接 SpeakPal…");
-    setStatus("", "连接中…");
-    initClient(result.deviceId || SpeakPalAuth.getDeviceId());
+    if (result && result.ok) {
+      showOverlay("正在连接 SpeakPal…");
+      setStatus("", "连接中…");
+      initClient(result.deviceId || SpeakPalAuth.getDeviceId());
+      return;
+    }
+    enterGuestMode();
   }
 
   if (document.readyState === "loading") {
