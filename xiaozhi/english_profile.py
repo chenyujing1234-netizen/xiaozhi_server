@@ -382,8 +382,29 @@ _CORRECTION_PROTOCOL = (
     "Step C: say the correct English clearly once for the student to repeat.\n"
     "Fix at most one or two important points per turn. "
     "Do not dump IPA or long grammar lectures. "
-    "If there is no clear issue, just continue the conversation warmly."
+    "If there is no clear issue, just continue the conversation warmly.\n"
+    "=== Spelling requests (怎么拼 / how do you spell) ===\n"
+    "When spelling a word letter by letter for the student, use commas or spaces "
+    "between letters (e.g. \"W, I, N, D, O, W, S\" or \"w i n d o w s\"), "
+    "then say the full word once clearly. "
+    "Never use hyphens between letters: do not write or speak forms like w-i-n-d-o-w-s."
 )
+
+# 导师字幕里常见的「逐字母拼读」连字符（不影响 twenty-one 等整词连字符）
+_SPELLING_HYPHEN_TOKEN = re.compile(r"\b(?:[A-Za-z]-)+[A-Za-z]\b")
+
+
+def normalize_spelling_hyphens(text: str) -> str:
+    """w-i-n-d-o-w-s → w i n d o w s（仅单字母用 - 串联的片段）。"""
+
+    def _repl(match: re.Match) -> str:
+        token = match.group(0)
+        parts = token.split("-")
+        if all(len(p) == 1 and p.isalpha() for p in parts):
+            return " ".join(parts)
+        return token
+
+    return _SPELLING_HYPHEN_TOKEN.sub(_repl, text or "")
 
 
 def build_instructions(

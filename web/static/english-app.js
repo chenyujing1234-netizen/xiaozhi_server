@@ -539,7 +539,22 @@
             setStatus("ready", "就绪");
             return;
           }
-          showToast(obj.message || obj.status || "提示", 3000);
+          var msg = (obj && obj.message) || (obj && obj.status) || "提示";
+          var cloudErr = obj && (
+            obj.status === "服务端异常"
+            || obj.status === "Server Error"
+            || /云端|服务端异常|超时|连接/.test(String(msg))
+          );
+          if (cloudErr) {
+            var holdMs = (obj && obj.duration_ms) || 6000;
+            showToast(msg, holdMs);
+            setTalkUi("idle");
+            setStatus("error", "云端异常");
+            showOverlay(msg);
+            setTimeout(function () { hideOverlay(); }, holdMs);
+            return;
+          }
+          showToast(msg, 3000);
         },
         goodbye: function () {
           setTalkUi("idle");

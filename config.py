@@ -91,7 +91,20 @@ class Config:
     FRAME_DURATION_MS = 60
 
     # 下行音频发送节奏（秒/帧）。略快于实时(0.06)，让设备播放缓冲略有富余但不溢出。
+    # 中文 CosyVoice 整句下发可用略快节奏；英语 MCU（Omni 流式）请用 ENGLISH_DOWNLINK_PACING_SEC。
     DOWNLINK_PACING_SEC = float(os.getenv("DOWNLINK_PACING_SEC", "0.045"))
+    # 英语 MCU：按接近实时节奏推 UDP，避免设备小缓冲过载/欠载导致卡顿叠音
+    ENGLISH_DOWNLINK_PACING_SEC = float(os.getenv("ENGLISH_DOWNLINK_PACING_SEC", "0.058"))
+    # 英语 MCU：开始推流前预缓冲的 Opus 帧数（8×60ms≈480ms，吸收开播阶段 Omni/网络抖动）
+    ENGLISH_DOWNLINK_PREBUFFER_FRAMES = int(os.getenv("ENGLISH_DOWNLINK_PREBUFFER_FRAMES", "8"))
+    # 英语 MCU：tts start 后等待多久再发首包 UDP。
+    # 固件仅在 Speaking 状态收音频；MQTT 切状态有延迟，发早了会被丢，表现为开头 1–3 秒一字一顿。
+    ENGLISH_TTS_START_LEAD_SEC = float(os.getenv("ENGLISH_TTS_START_LEAD_SEC", "0.28"))
+    # 英语 MCU：预缓冲齐后，前几帧用更短间隔突发，尽快填满设备解码队列
+    ENGLISH_DOWNLINK_BURST_FRAMES = int(os.getenv("ENGLISH_DOWNLINK_BURST_FRAMES", "6"))
+    ENGLISH_DOWNLINK_BURST_PACING_SEC = float(os.getenv("ENGLISH_DOWNLINK_BURST_PACING_SEC", "0.02"))
+    # 英语 MCU：tts stop 后延迟再开上行，避免喇叭残留/回声触发下一轮重叠回复
+    ENGLISH_UPLINK_REOPEN_DELAY_SEC = float(os.getenv("ENGLISH_UPLINK_REOPEN_DELAY_SEC", "0.35"))
 
     # ---- 静音超时（节省 ASR 流式识别费用）----
     # 连续多少秒没有有效语音 → 关闭 ASR 并向设备发 goodbye（退出“聆听中”）
@@ -113,6 +126,12 @@ class Config:
     EMPTY_OMNI_SPEECH_NO_TEXT_SEC = float(
         os.getenv("EMPTY_OMNI_SPEECH_NO_TEXT_SEC", "10")
     )
+    # 英语：已向 Omni 提交/等待回复后，多久无音频/完成事件视为云端失败并通知客户端
+    ENGLISH_OMNI_RESPONSE_TIMEOUT_SEC = float(
+        os.getenv("ENGLISH_OMNI_RESPONSE_TIMEOUT_SEC", "25")
+    )
+    # 云端异常 alert 在 MCU 上保留多久再发 goodbye（goodbye 会清屏；太短用户看不清）
+    ALERT_DISPLAY_SEC = float(os.getenv("ALERT_DISPLAY_SEC", "6"))
 
     # 流式 LLM → TTS：累计多少字且遇到逗号/句号等软标点时，先合成并下发首段音频
     TTS_SPLIT_MIN_CHARS = int(os.getenv("TTS_SPLIT_MIN_CHARS", "10"))
@@ -138,7 +157,7 @@ class Config:
     ENGLISH_WS_PATH = os.getenv("ENGLISH_WS_PATH", "/xiaozhi/english/v1/")
 
     # 语音转语音多模态模型（百炼 S2S，音频进 → 音频出，适合口语纠正）
-    ENGLISH_OMNI_MODEL = os.getenv("ENGLISH_OMNI_MODEL", "qwen3.5-omni-plus-realtime")
+    ENGLISH_OMNI_MODEL = os.getenv("ENGLISH_OMNI_MODEL", "qwen3.5-omni-flash-realtime")
     ENGLISH_OMNI_VOICE = os.getenv("ENGLISH_OMNI_VOICE", "Ethan")
     ENGLISH_OMNI_INSTRUCTIONS = os.getenv(
         "ENGLISH_OMNI_INSTRUCTIONS",
@@ -160,6 +179,8 @@ class Config:
         "teach useful English words or short phrases for objects in the photo, "
         "and invite the student to describe the picture in English. "
         "When they describe the photo, help with vocabulary and correct key mistakes. "
+        "When spelling a word letter by letter, use spaces or commas between letters, "
+        "never hyphens (not w-i-n-d-o-w-s). Then say the whole word once. "
         "Keep replies natural for voice. Do not use markdown, bullet points, or emoji.",
     )
     # Omni Realtime WebSocket（国内默认 endpoint）
