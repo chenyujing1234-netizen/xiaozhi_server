@@ -30,11 +30,15 @@ def setup_logging():
         datefmt="%H:%M:%S",
     )
     logging.getLogger("websockets").setLevel(logging.WARNING)
+    logging.getLogger("websockets.server").setLevel(logging.CRITICAL)
     logging.getLogger("aiohttp").setLevel(logging.WARNING)
 
 
 async def main():
     setup_logging()
+    from xiaozhi import runtime_config as rc
+
+    rc.apply_log_level(rc.get_str("LOG_LEVEL") or config.LOG_LEVEL)
     log = logging.getLogger("main")
 
     if not config.DASHSCOPE_API_KEY:

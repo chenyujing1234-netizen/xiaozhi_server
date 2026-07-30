@@ -22,6 +22,7 @@ from dashscope.audio.qwen_omni import (
 )
 
 from config import config
+from xiaozhi import runtime_config as rc
 from .silence_vad import (
     EmptyTurnTracker,
     SilenceGate,
@@ -42,6 +43,9 @@ from .english_profile import (
     normalize_spelling_hyphens,
     refine_profile,
 )
+from .english_router import TurnRoute, route_turn
+from .english_text_turn import run_text_turn
+from .providers import asr as asr_provider
 from .opus_codec import OpusDecoder, OpusEncoder
 
 logger = logging.getLogger("english")
@@ -190,6 +194,52 @@ class EnglishSession:
         self._pending_image_b64: Optional[str] = None
         self._image_injected = False
 
+        # 路由聆听：ASR + PCM 缓冲（Omni 仅在被路由选中时按需连接）
+        self._asr: Optional[asr_provider.AsrStream] = None
+        self._last_asr_partial = ""
+        self._asr_feed_logged = False
+        self._utterance_finalizing = False
+        self._utterance_pcm_buf: Optional[bytearray] = None
+        self._turn_task: Optional[asyncio.Task] = None
+        self._sticky_omni_until = 0.0
+        self._omni_manual_turn = False
+        self._turn_web_search = False
+        self._text_downlink_mode = False
+        self._asr_finalize_task: Optional[asyncio.Task] = None
+        self._asr_segment_parts: list[str] = []
+        self._asr_stop_intentional = False
+
+    def _cancel_asr_debounced_finalize(self):
+        t = self._asr_finalize_task
+        self._asr_finalize_task = None
+        if t is None or t.done():
+            return
+        # 勿取消当前正在跑 _commit 的 task，否则会在 sleep 处 CancelledError 半途中止
+        try:
+            current = asyncio.current_task()
+        except RuntimeError:
+            current = None
+        if current is not None and t is current:
+            return
+        t.cancel()
+
+    def _use_routed_listen(self) -> bool:
+        return rc.get_bool("ENGLISH_ROUTE_ENABLED")
+
+    def _omni_search_session_kwargs(self) -> dict:
+        """方案 C：Omni Realtime session.update 联网参数。"""
+        if not rc.get_bool("ENGLISH_OMNI_ENABLE_SEARCH"):
+            return {}
+        strategy = (
+            rc.get_str("ENGLISH_OMNI_SEARCH_STRATEGY")
+            or config.ENGLISH_OMNI_SEARCH_STRATEGY
+            or "agent"
+        )
+        return {
+            "enable_search": True,
+            "search_options": {"search_strategy": strategy},
+        }
+
     # ---------------- 消息分发 ----------------
 
     async def handle_text(self, raw: str):
@@ -227,7 +277,10 @@ class EnglishSession:
             logger.debug("未处理的消息类型: %s", msg_type)
 
     def handle_binary(self, data: bytes):
-        if not self._listening or self._speaking or not self._uplink_open:
+        if self._use_routed_listen():
+            if not self._listening or self._speaking:
+                return
+        elif not self._listening or self._speaking or not self._uplink_open:
             self._uplink_drop_log_counter += 1
             if self._uplink_drop_log_counter == 1 or self._uplink_drop_log_counter % 50 == 0:
                 logger.info(
@@ -250,10 +303,33 @@ class EnglishSession:
             data = await self._audio_queue.get()
             if data is None:
                 break
-            if not self._listening or self._speaking or self._omni is None:
-                continue
             pcm = data if self._web_pcm_mode else self.decoder.decode(data)
             if not pcm:
+                continue
+
+            if self._use_routed_listen():
+                if not self._listening or self._speaking or self._asr is None:
+                    continue
+                result = self._vad.on_frame(pcm)
+                if not result.active_speech:
+                    continue
+                if not self._asr_feed_logged:
+                    self._asr_feed_logged = True
+                    self._vad.mark_utterance_active()
+                    self._utterance_pcm_buf = bytearray()
+                    logger.info(
+                        "[english][%s] 路由聆听：检测到语音，送 ASR 并缓冲 PCM",
+                        self.session_id,
+                    )
+                if self._utterance_pcm_buf is not None:
+                    self._utterance_pcm_buf.extend(pcm)
+                try:
+                    await self.loop.run_in_executor(None, self._asr.send, pcm)
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("[english][%s] 喂 ASR 失败: %s", self.session_id, e)
+                continue
+
+            if not self._listening or self._speaking or self._omni is None:
                 continue
             result = self._vad.on_frame(pcm)
             if result.active_speech:
@@ -405,6 +481,22 @@ class EnglishSession:
         await self._handle_omni_error(detail)
 
     async def _silence_watchdog_loop(self):
+        if self._use_routed_listen():
+            await silence_watchdog_loop(
+                self._vad,
+                should_run=lambda: (
+                    self._listening
+                    and self._asr is not None
+                    and not self._utterance_finalizing
+                    and not self._speaking
+                ),
+                is_busy=lambda: self._speaking or (
+                    self._turn_task is not None and not self._turn_task.done()
+                ),
+                on_idle_timeout=self._on_silence_timeout,
+                on_utterance_end=self._finalize_routed_utterance,
+            )
+            return
         await silence_watchdog_loop(
             self._vad,
             should_run=lambda: self._listening,
@@ -523,6 +615,8 @@ class EnglishSession:
         self._speech_no_text_since = None
         self._no_text_log_at_sec = -1
         self._stop_audio_consumer()
+        if self._use_routed_listen():
+            self._stop_asr_english()
         # 先通知设备回 idle，再清理 Omni（避免 close 耗时/异常导致 MCU 一直聆听）
         try:
             await self._send_json({"type": "goodbye"})
@@ -586,14 +680,20 @@ class EnglishSession:
         """清掉云端卡住的 response 再建一轮；成功发起 create 返回 True。"""
         if self._omni is None:
             return False
-        try:
-            await self.loop.run_in_executor(None, self._omni.cancel_response)
-        except Exception as e:  # noqa: BLE001
+        if self._active_response_id:
+            try:
+                await self.loop.run_in_executor(None, self._omni.cancel_response)
+            except Exception as e:  # noqa: BLE001
+                logger.info(
+                    "[english][%s] cancel_response（%s）: %s",
+                    self.session_id, reason, e,
+                )
+            await asyncio.sleep(0.35)
+        else:
             logger.info(
-                "[english][%s] cancel_response（%s）: %s",
-                self.session_id, reason, e,
+                "[english][%s] 解卡跳过 cancel（无 active response）reason=%s",
+                self.session_id, reason,
             )
-        await asyncio.sleep(0.35)
         if self._response_had_audio or self._tts_start_sent or self._speaking:
             return False
         try:
@@ -605,6 +705,12 @@ class EnglishSession:
             return True
         except Exception as e:  # noqa: BLE001
             msg = str(e)
+            if self._is_benign_omni_error(msg):
+                logger.info(
+                    "[english][%s] create_response  benign（%s）: %s",
+                    self.session_id, reason, msg,
+                )
+                return False
             if "already has an active response" in msg.lower():
                 logger.info(
                     "[english][%s] create_response 仍撞 active（%s），再 cancel 一次",
@@ -717,7 +823,12 @@ class EnglishSession:
     @staticmethod
     def _is_benign_omni_error(detail: str) -> bool:
         low = (detail or "").lower()
-        return "already has an active response" in low
+        if "already has an active response" in low:
+            return True
+        # cancel_response 时云端已无 active response（server_vad 已收尾或未建轮）
+        if "none active response" in low or "no active response" in low:
+            return True
+        return False
 
     async def _note_omni_empty_turn(self, *, reason: str):
         """Omni 一轮结束但无用户文本 → 空转计数。"""
@@ -787,8 +898,11 @@ class EnglishSession:
 
     async def _on_abort(self, msg: dict):
         logger.info("[english] 收到 abort, reason=%s", msg.get("reason"))
-        # 先置取消并清空下行队列，再抢 omni 锁结束本轮
         self._cancel = True
+        t = self._turn_task
+        self._turn_task = None
+        if t is not None and not t.done():
+            t.cancel()
         await self._abort_downlink()
         if self._omni is not None:
             try:
@@ -857,6 +971,300 @@ class EnglishSession:
         self._image_injected = False
         await self._send_json({"type": "image_ack", "ok": True, "cleared": True})
         logger.info("[english][%s] 已清除会话图片", self.session_id)
+
+    # ---------------- 路由聆听：ASR → 判路由 → TEXT / OMNI ----------------
+
+    def _make_asr_callbacks(self):
+        def on_partial(text: str):
+            self._last_asr_partial = text
+
+        def on_final(text: str):
+            asyncio.run_coroutine_threadsafe(
+                self._on_asr_final_while_listening(text), self.loop
+            )
+
+        def on_error(msg: str):
+            asyncio.run_coroutine_threadsafe(
+                self._handle_asr_error(msg), self.loop
+            )
+
+        return on_partial, on_final, on_error
+
+    async def _handle_asr_error(self, detail: str):
+        if self._asr_stop_intentional:
+            logger.debug(
+                "[english][%s] 忽略 ASR 收尾提示（主动 stop）: %s",
+                self.session_id, detail,
+            )
+            return
+        async with self._turn_lock:
+            if self._error_notified or self._speaking:
+                return
+            self._error_notified = True
+            self._listening = False
+        self._stop_silence_watchdog()
+        self._stop_asr_english()
+        self._stop_audio_consumer()
+        await self._notify_error(ERROR_USER_ZH, detail=f"ASR: {detail}")
+
+    async def _on_asr_final_while_listening(self, text: str):
+        """Paraformer 句末：更新文本，并在静音间隔后提交一轮（不依赖本地 VAD）。"""
+        text = (text or "").strip()
+        if not text or not self._listening or self._speaking:
+            return
+        self._last_asr_partial = text
+        if not self._asr_segment_parts or self._asr_segment_parts[-1] != text:
+            self._asr_segment_parts.append(text)
+        logger.info(
+            "[english][%s] ASR 句末=%r segments=%d，%.1fs 无新句则提交",
+            self.session_id,
+            text[:80],
+            len(self._asr_segment_parts),
+            rc.get_float("ENGLISH_ASR_UTTERANCE_GAP_SEC"),
+        )
+        self._schedule_asr_debounced_finalize()
+
+    def _schedule_asr_debounced_finalize(self):
+        self._cancel_asr_debounced_finalize()
+        self._asr_finalize_task = asyncio.create_task(
+            self._asr_debounced_finalize_loop()
+        )
+
+    async def _asr_debounced_finalize_loop(self):
+        try:
+            await asyncio.sleep(rc.get_float("ENGLISH_ASR_UTTERANCE_GAP_SEC"))
+            if not self._listening or self._speaking or self._utterance_finalizing:
+                return
+            parts = [p for p in self._asr_segment_parts if p]
+            text = (self._last_asr_partial or "").strip()
+            if parts:
+                text = "".join(parts)
+            if not text:
+                return
+            await self._commit_routed_utterance(text, reason="asr_gap")
+        except asyncio.CancelledError:
+            if self._utterance_finalizing and not self._speaking:
+                self._utterance_finalizing = False
+            raise
+
+    async def _commit_routed_utterance(self, text: str, *, reason: str):
+        self._cancel_asr_debounced_finalize()
+        async with self._turn_lock:
+            if self._speaking or not self._listening or self._utterance_finalizing:
+                return
+            self._utterance_finalizing = True
+
+        self._asr_stop_intentional = True
+        try:
+            self._stop_asr_english()
+        finally:
+            self._asr_stop_intentional = False
+        await asyncio.sleep(0.25)
+
+        async with self._turn_lock:
+            if self._speaking:
+                self._utterance_finalizing = False
+                return
+
+        pcm_snapshot = bytes(self._utterance_pcm_buf or b"")
+        self._utterance_pcm_buf = None
+        self._asr_segment_parts = []
+
+        text = (text or "").strip()
+        if text:
+            logger.info(
+                "[english][%s] 路由提交 reason=%s text=%r pcm=%dB",
+                self.session_id, reason, text[:120], len(pcm_snapshot),
+            )
+            self._empty_turns.note_text()
+            await self._dispatch_routed_turn(text, pcm_snapshot)
+        else:
+            self._utterance_finalizing = False
+            self._vad.clear_utterance()
+            self._asr_feed_logged = False
+            self._last_asr_partial = ""
+            if self._empty_turns.note_empty(reason=f"{reason}但ASR无文本"):
+                await self._send_idle_goodbye()
+            else:
+                await self._reopen_asr_english()
+
+    async def _start_asr_english(self):
+        on_partial, on_final, on_error = self._make_asr_callbacks()
+        self._asr = asr_provider.AsrStream(
+            model=config.ASR_MODEL,
+            sample_rate=config.UPLINK_SAMPLE_RATE,
+            on_final=on_final,
+            on_partial=on_partial,
+            on_error=on_error,
+        )
+        await self.loop.run_in_executor(None, self._asr.start)
+
+    def _stop_asr_english(self):
+        if self._asr is not None:
+            try:
+                self._asr.stop()
+            except Exception:  # noqa: BLE001
+                pass
+            self._asr = None
+
+    async def _reopen_asr_english(self):
+        if not self._listening or self._speaking:
+            return
+        self._cancel_asr_debounced_finalize()
+        self._asr_feed_logged = False
+        self._last_asr_partial = ""
+        self._asr_segment_parts = []
+        self._utterance_pcm_buf = None
+        self._utterance_finalizing = False
+        self._vad.clear_utterance()
+        self._vad.mark_after_playback()
+        try:
+            await self._start_asr_english()
+            if self._audio_task is None or self._audio_task.done():
+                self._audio_task = asyncio.create_task(self._audio_consumer())
+            self._start_silence_watchdog()
+            logger.info("[english][%s] 路由聆听：ASR 已重新连接", self.session_id)
+        except Exception as e:  # noqa: BLE001
+            self._asr = None
+            await self._handle_asr_error(f"重新连接失败: {e}")
+
+    async def _finalize_routed_utterance(self):
+        """本地 VAD 句末静音（噪声低时生效；与 ASR 句末防抖二选一先触发）。"""
+        async with self._turn_lock:
+            if self._speaking or not self._listening or self._utterance_finalizing:
+                return
+            if not self._vad.utterance_had_speech:
+                return
+        parts = [p for p in self._asr_segment_parts if p]
+        text = (self._last_asr_partial or "").strip()
+        if parts:
+            text = "".join(parts)
+        await self._commit_routed_utterance(text, reason="vad_silence")
+
+    async def _dispatch_routed_turn(self, user_text: str, pcm: bytes):
+        self._utterance_finalizing = False
+        self._stop_silence_watchdog()
+        self._stop_audio_consumer()
+
+        profile_snip = (self._profile.profile_text or "")[:160]
+        sticky = time.time() < self._sticky_omni_until
+        decision = route_turn(
+            user_text,
+            has_image=bool(self._pending_image_b64),
+            sticky_omni=sticky,
+            profile_snippet=profile_snip,
+        )
+        logger.info(
+            "[english][%s] 路由 decision=%s source=%s reason=%s search=%s text=%r",
+            self.session_id,
+            decision.route.value,
+            decision.source,
+            decision.reason,
+            decision.web_search,
+            user_text[:120],
+        )
+
+        self._turn_web_search = decision.web_search
+
+        self._last_user_text = user_text
+        self._user_turn_buf = user_text
+        self._last_tutor_text = ""
+        self._tutor_stream_buf = ""
+        self._turn_saved = False
+        await self._send_json({"type": "stt", "text": user_text, "partial": False})
+
+        if looks_like_preference_request(user_text):
+            self._schedule_explicit_profile_refine(user_text)
+
+        if decision.route == TurnRoute.OMNI:
+            self._sticky_omni_until = time.time() + rc.get_float("ENGLISH_OMNI_STICKY_SEC")
+            self._turn_task = asyncio.create_task(
+                self._run_omni_replay_turn(user_text, pcm)
+            )
+        else:
+            self._listening = False
+            self._turn_task = asyncio.create_task(
+                self._run_text_pipeline_turn(user_text)
+            )
+
+    async def _run_text_pipeline_turn(self, user_text: str):
+        self._speaking = True
+        self._cancel = False
+        self._tts_start_sent = False
+        self._text_downlink_mode = True
+        self._stop_silence_watchdog()
+        try:
+            reply = await run_text_turn(
+                self,
+                user_text,
+                send_json=self._send_json,
+                play_pcm_frames=self._text_enqueue_pcm,
+                is_cancelled=lambda: self._cancel,
+                enable_search=self._turn_web_search,
+            )
+            self._last_tutor_text = reply or ""
+            await self._enqueue_pcm_frames(b"", flush=True)
+            if reply.strip():
+                self._empty_turns.note_text()
+                self._schedule_history_save()
+                self._schedule_profile_update()
+                self._schedule_diagnosis()
+        except Exception as e:  # noqa: BLE001
+            logger.exception("[english][%s] TEXT 轮异常: %s", self.session_id, e)
+            await self._handle_omni_error(str(e))
+            return
+        finally:
+            self._text_downlink_mode = False
+            await self._finish_speaking()
+            self._turn_task = None
+            if self._use_routed_listen() and not self._web_pcm_mode:
+                self._listening = True
+                await self._reopen_asr_english()
+
+    async def _text_enqueue_pcm(self, pcm: bytes):
+        if not pcm or self._cancel:
+            return
+        if not self._tts_start_sent:
+            self._tts_start_sent = True
+            self._tts_start_at = time.time()
+        await self._enqueue_pcm_frames(pcm, flush=False)
+
+    async def _run_omni_replay_turn(self, user_text: str, pcm: bytes):
+        self._cancel = False
+        self._response_had_audio = False
+        self._omni_turn_has_user_text = True
+        self._uplink_open = False
+        self._note_omni_user_text(user_text)
+        min_pcm = MIN_WEB_OMNI_PCM_BYTES
+        if len(pcm) < min_pcm:
+            await self._notify_too_short()
+            self._turn_task = None
+            self._listening = True
+            await self._reopen_asr_english()
+            return
+        try:
+            await self._open_omni(manual_turn=True)
+            await self._inject_pending_image()
+            self._omni_pcm_bytes = 0
+            chunk = 3200
+            for i in range(0, len(pcm), chunk):
+                part = pcm[i : i + chunk]
+                await self._feed_pcm_to_omni(part)
+            if self._pending_image_b64:
+                await self._inject_pending_image(seed_silence=False, force=True)
+            await self.loop.run_in_executor(None, self._omni.commit)
+            await self.loop.run_in_executor(None, self._omni.create_response)
+            self._arm_omni_response_watch("routed_replay")
+            logger.info(
+                "[english][%s] OMNI 回放 pcm=%dB，已 commit+create_response",
+                self.session_id, len(pcm),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.error("[english][%s] OMNI 回放失败: %s", self.session_id, e)
+            await self._handle_omni_error(str(e))
+            self._turn_task = None
+            self._listening = True
+            await self._reopen_asr_english()
 
     async def _inject_pending_image(self, *, seed_silence: bool = True, force: bool = False):
         """向 Omni 注入图片。开场可带静音种子；commit 前应再 force 注入一次。"""
@@ -934,32 +1342,87 @@ class EnglishSession:
         self._omni_pcm_bytes = 0
         self._user_turn_buf = ""
         self._image_injected = False
+        self._last_asr_partial = ""
+        self._asr_feed_logged = False
+        self._utterance_finalizing = False
+        self._utterance_pcm_buf = None
+        self._asr_segment_parts = []
+        self._cancel_asr_debounced_finalize()
+        self._profile = get_store().get(self.device_id)
+        self._history_context = await self.loop.run_in_executor(
+            None, self._load_history_context
+        )
 
         try:
-            await self._open_omni()
-            await self._inject_pending_image()
-            self._audio_task = asyncio.create_task(self._audio_consumer())
-            self._start_silence_watchdog()
-            logger.info(
-                "[english][%s] 开始聆听，Omni 已连接 model=%s voice=%s has_image=%s "
-                "静音超时=%.0fs RMS阈值=%.0f",
-                self.session_id,
-                config.ENGLISH_OMNI_MODEL,
-                config.ENGLISH_OMNI_VOICE,
-                bool(self._pending_image_b64),
-                config.SILENCE_TIMEOUT_SEC,
-                config.SPEECH_RMS_THRESHOLD,
-            )
+            if self._use_routed_listen():
+                await self._start_asr_english()
+                self._audio_task = asyncio.create_task(self._audio_consumer())
+                self._start_silence_watchdog()
+                logger.info(
+                    "[english][%s] 开始聆听（路由模式 ASR=%s，默认=%s）"
+                    " has_image=%s 静音超时=%.0fs",
+                    self.session_id,
+                    config.ASR_MODEL,
+                    rc.get_str("ENGLISH_DEFAULT_ROUTE"),
+                    bool(self._pending_image_b64),
+                    config.SILENCE_TIMEOUT_SEC,
+                )
+            else:
+                await self._open_omni()
+                await self._inject_pending_image()
+                self._audio_task = asyncio.create_task(self._audio_consumer())
+                self._start_silence_watchdog()
+                logger.info(
+                    "[english][%s] 开始聆听，Omni 已连接 model=%s voice=%s has_image=%s "
+                    "静音超时=%.0fs RMS阈值=%.0f",
+                    self.session_id,
+                    rc.get_str("ENGLISH_OMNI_MODEL"),
+                    rc.get_str("ENGLISH_OMNI_VOICE"),
+                    bool(self._pending_image_b64),
+                    config.SILENCE_TIMEOUT_SEC,
+                    config.SPEECH_RMS_THRESHOLD,
+                )
         except Exception as e:  # noqa: BLE001
-            logger.error("[english] 启动 Omni 失败: %s", e)
-            await self._handle_omni_error(f"无法连接云端口语模型: {e}")
+            logger.error("[english] 启动聆听失败: %s", e)
+            if self._use_routed_listen():
+                await self._handle_asr_error(f"启动 ASR 失败: {e}")
+            else:
+                await self._handle_omni_error(f"无法连接云端口语模型: {e}")
 
     async def _stop_listening(self):
         self._listening = False
         self._uplink_open = False
         self._stop_silence_watchdog()
         self._stop_audio_consumer()
+        if self._use_routed_listen():
+            self._stop_asr_english()
         await self._close_omni()
+
+    async def _flush_routed_audio_queue(self):
+        """Web 松手：把队列里剩余帧送入 ASR / PCM 缓冲。"""
+        while True:
+            try:
+                data = self._audio_queue.get_nowait()
+            except QueueEmpty:
+                break
+            if data is None:
+                continue
+            pcm = data if self._web_pcm_mode else self.decoder.decode(data)
+            if not pcm or self._asr is None:
+                continue
+            result = self._vad.on_frame(pcm)
+            if not result.active_speech:
+                continue
+            if not self._asr_feed_logged:
+                self._asr_feed_logged = True
+                self._vad.mark_utterance_active()
+                self._utterance_pcm_buf = bytearray()
+            if self._utterance_pcm_buf is not None:
+                self._utterance_pcm_buf.extend(pcm)
+            try:
+                await self.loop.run_in_executor(None, self._asr.send, pcm)
+            except Exception:  # noqa: BLE001
+                pass
 
     async def _flush_audio_queue(self):
         """把队列里尚未喂给 Omni 的音频全部送出。"""
@@ -976,8 +1439,32 @@ class EnglishSession:
             await self._feed_pcm_to_omni(pcm)
 
     async def _finish_user_utterance(self):
-        """Web 按住说话松手：提交音频并等待 Omni 回复，不立刻断开。"""
-        if not self._listening or self._omni is None:
+        """Web 按住说话松手：路由模式下走 ASR+判路由；否则走原 Omni commit。"""
+        if not self._listening:
+            return
+        self._uplink_open = False
+        self._stop_silence_watchdog()
+        await asyncio.sleep(0.25)
+        await self._flush_routed_audio_queue()
+        await asyncio.sleep(0.05)
+
+        if self._use_routed_listen():
+            partial = (self._last_asr_partial or "").strip()
+            pcm_snapshot = bytes(self._utterance_pcm_buf or b"")
+            self._stop_asr_english()
+            await asyncio.sleep(0.25)
+            partial = (self._last_asr_partial or partial or "").strip()
+            if len(pcm_snapshot) < MIN_WEB_OMNI_PCM_BYTES:
+                await self._notify_too_short()
+                return
+            if not partial:
+                await self._notify_too_short()
+                return
+            self._listening = False
+            await self._dispatch_routed_turn(partial, pcm_snapshot)
+            return
+
+        if self._omni is None:
             return
         self._uplink_open = False
         self._stop_silence_watchdog()
@@ -1037,9 +1524,16 @@ class EnglishSession:
                 "Describe or discuss what is actually in the image, teach useful English words, "
                 "and help the student talk about the photo."
             )
+        if rc.get_bool("ENGLISH_OMNI_ENABLE_SEARCH"):
+            text += (
+                "\n\nWEB SEARCH: Web search is enabled for this session. "
+                "For questions about today's date, news, weather, or other "
+                "time-sensitive facts, use search results and answer accurately."
+            )
         return text
 
-    async def _open_omni(self):
+    async def _open_omni(self, *, manual_turn: bool = False):
+        self._omni_manual_turn = manual_turn
         self._profile = get_store().get(self.device_id)
         self._history_context = await self.loop.run_in_executor(
             None, self._load_history_context
@@ -1047,36 +1541,43 @@ class EnglishSession:
         instructions = self._build_session_instructions()
         callback = _OmniBridge(self)
         conv = OmniRealtimeConversation(
-            model=config.ENGLISH_OMNI_MODEL,
+            model=rc.get_str("ENGLISH_OMNI_MODEL"),
             callback=callback,
             url=config.ENGLISH_OMNI_WS_URL,
         )
         await self.loop.run_in_executor(None, conv.connect)
 
-        # Web 按住说话走手动 commit；开着 server_vad 容易抢先提交，导致看图帧丢失
-        use_server_vad = not self._web_pcm_mode
+        # Web / OMNI 回放：手动 commit；MCU 常连 Omni 才用 server_vad
+        use_server_vad = (
+            not self._web_pcm_mode
+            and not manual_turn
+            and not self._use_routed_listen()
+        )
 
         def _configure():
             conv.update_session(
                 output_modalities=[MultiModality.AUDIO, MultiModality.TEXT],
-                voice=config.ENGLISH_OMNI_VOICE,
+                voice=rc.get_str("ENGLISH_OMNI_VOICE"),
                 input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
                 output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
                 enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
+                **self._omni_search_session_kwargs(),
             )
 
         await self.loop.run_in_executor(None, _configure)
         self._omni = conv
+        search_on = rc.get_bool("ENGLISH_OMNI_ENABLE_SEARCH")
         hist_chars = len(self._history_context or "")
         logger.info(
-            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d vad=%s text=%s",
+            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d vad=%s search=%s text=%s",
             self.session_id,
             self._profile.turn_count,
             self._profile.last_refine_turn,
             hist_chars,
             "server_vad" if use_server_vad else "manual",
+            search_on,
             (self._profile.profile_text or "")[:120],
         )
 
@@ -1092,12 +1593,13 @@ class EnglishSession:
         def _update():
             omni.update_session(
                 output_modalities=[MultiModality.AUDIO, MultiModality.TEXT],
-                voice=config.ENGLISH_OMNI_VOICE,
+                voice=rc.get_str("ENGLISH_OMNI_VOICE"),
                 input_audio_format=AudioFormat.PCM_16000HZ_MONO_16BIT,
                 output_audio_format=AudioFormat.PCM_24000HZ_MONO_16BIT,
                 enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
+                **self._omni_search_session_kwargs(),
             )
 
         try:
@@ -1372,6 +1874,12 @@ class EnglishSession:
                     bool(text),
                 )
                 if text:
+                    if self._omni_manual_turn and (self._last_user_text or "").strip():
+                        logger.info(
+                            "[english][%s] OMNI 回放转写与路由轮重复，跳过二次处理",
+                            self.session_id,
+                        )
+                        return
                     full = self._append_user_transcript(text)
                     logger.info("[english][%s] 用户说: %s", self.session_id, full)
                     self._last_user_text = full
@@ -1558,6 +2066,13 @@ class EnglishSession:
                 self._omni_turn_has_user_text = False
                 self._user_turn_buf = ""
                 self._active_response_id = None
+                if self._use_routed_listen() and self._omni_manual_turn:
+                    self._omni_manual_turn = False
+                    self._turn_task = None
+                    await self._close_omni()
+                    if not self._web_pcm_mode and not self._error_notified:
+                        self._listening = True
+                        await self._reopen_asr_english()
 
             elif etype == "error":
                 err = event.get("error", {})
@@ -1622,7 +2137,14 @@ class EnglishSession:
     def _downlink_prebuffer_frames(self) -> int:
         if self._web_pcm_mode:
             return 1
+        if self._text_downlink_mode:
+            return max(1, config.ENGLISH_TEXT_DOWNLINK_PREBUFFER_FRAMES)
         return max(1, config.ENGLISH_DOWNLINK_PREBUFFER_FRAMES)
+
+    def _downlink_burst_frames(self) -> int:
+        if self._text_downlink_mode:
+            return max(0, config.ENGLISH_TEXT_DOWNLINK_BURST_FRAMES)
+        return max(0, config.ENGLISH_DOWNLINK_BURST_FRAMES)
 
     def _ensure_downlink_task(self):
         if self._downlink_task is None or self._downlink_task.done():
@@ -1676,6 +2198,9 @@ class EnglishSession:
         """等 MCU 处理完 tts start 进入 Speaking，再发 UDP，否则固件会丢包。"""
         if self._web_pcm_mode:
             return
+        if self._text_downlink_mode:
+            # TEXT 轮在 run_text_turn 里已 sleep 过 ENGLISH_TEXT_TTS_START_LEAD_SEC
+            return
         lead = max(0.0, float(config.ENGLISH_TTS_START_LEAD_SEC))
         if lead <= 0:
             return
@@ -1727,7 +2252,7 @@ class EnglishSession:
                         await self._wait_tts_start_lead()
                         started = True
                         pacing = self._downlink_pacing_sec()
-                        burst_left = max(0, config.ENGLISH_DOWNLINK_BURST_FRAMES)
+                        burst_left = max(0, self._downlink_burst_frames())
                     for frame in pending:
                         if not await _send_one(frame):
                             break
@@ -1738,13 +2263,14 @@ class EnglishSession:
                     if sent:
                         logger.info(
                             "[english][%s] 下行发送完毕 frames=%d pacing=%.3f "
-                            "prebuffer=%d lead=%.2f web=%s",
+                            "prebuffer=%d lead=%.2f web=%s text=%s",
                             self.session_id,
                             sent,
                             pacing,
                             prebuffer,
                             config.ENGLISH_TTS_START_LEAD_SEC,
                             self._web_pcm_mode,
+                            self._text_downlink_mode,
                         )
                         sent = 0
                     continue
@@ -1759,13 +2285,14 @@ class EnglishSession:
                         started = True
                         pacing = self._downlink_pacing_sec()
                         prebuffer = self._downlink_prebuffer_frames()
-                        burst_left = max(0, config.ENGLISH_DOWNLINK_BURST_FRAMES)
+                        burst_left = max(0, self._downlink_burst_frames())
                         logger.info(
-                            "[english][%s] 下行开播 prebuffer=%d burst=%d pacing=%.3f",
+                            "[english][%s] 下行开播 prebuffer=%d burst=%d pacing=%.3f text=%s",
                             self.session_id,
                             len(pending),
                             burst_left,
                             pacing,
+                            self._text_downlink_mode,
                         )
                         for frame in pending:
                             if not await _send_one(frame):
@@ -1843,19 +2370,39 @@ class EnglishSession:
         if self._listening:
             self._uplink_open = False
             self._cancel_uplink_reopen()
-            delay = (
-                0.0
-                if (aborted or self._web_pcm_mode)
-                else config.ENGLISH_UPLINK_REOPEN_DELAY_SEC
-            )
-            self._uplink_reopen_task = asyncio.create_task(
-                self._delayed_reopen_uplink(delay)
-            )
+            if self._use_routed_listen() and not self._web_pcm_mode:
+                delay = (
+                    0.0
+                    if aborted
+                    else config.ENGLISH_UPLINK_REOPEN_DELAY_SEC
+                )
+                self._uplink_reopen_task = asyncio.create_task(
+                    self._delayed_reopen_routed_listen(delay)
+                )
+            elif not self._use_routed_listen():
+                delay = (
+                    0.0
+                    if (aborted or self._web_pcm_mode)
+                    else config.ENGLISH_UPLINK_REOPEN_DELAY_SEC
+                )
+                self._uplink_reopen_task = asyncio.create_task(
+                    self._delayed_reopen_uplink(delay)
+                )
+
+    async def _delayed_reopen_routed_listen(self, delay_sec: float):
+        try:
+            if delay_sec > 0:
+                await asyncio.sleep(delay_sec)
+            if self._cancel or self._speaking or not self._listening:
+                return
+            await self._reopen_asr_english()
+        except asyncio.CancelledError:
+            return
 
     async def _cancel_speaking(self):
         self._cancel = True
         await self._abort_downlink()
-        if self._omni is not None:
+        if self._omni is not None and self._active_response_id:
             try:
                 await self.loop.run_in_executor(None, self._omni.cancel_response)
             except Exception:  # noqa: BLE001
@@ -1872,6 +2419,15 @@ class EnglishSession:
         if self._is_benign_omni_error(detail):
             logger.info(
                 "[english][%s] 忽略无害 Omni 错误 detail=%r",
+                self.session_id, (detail or "")[:160],
+            )
+            return
+        # 本轮已成功出回复后，解卡/取消触发的迟到的 error 事件不再打扰用户
+        if (self._last_tutor_text or "").strip() and (
+            self._response_had_audio or self._turn_saved
+        ):
+            logger.info(
+                "[english][%s] 忽略回合已成功后的 Omni 提示 detail=%r",
                 self.session_id, (detail or "")[:160],
             )
             return

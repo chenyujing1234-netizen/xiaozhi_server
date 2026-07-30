@@ -134,12 +134,18 @@ async def _handle_speak_redirect(_request: web.Request) -> web.Response:
     raise web.HTTPFound("/english/")
 
 
+async def _handle_admin(_request: web.Request) -> web.FileResponse:
+    return web.FileResponse(WEB_DIR / "admin.html")
+
+
 def build_app() -> web.Application:
     app = web.Application()
     # SpeakPal 登录（手机号 / 微信 openid）
     from xiaozhi.auth_api import setup_auth_routes
+    from xiaozhi.admin_api import setup_admin_routes
 
     setup_auth_routes(app)
+    setup_admin_routes(app)
     # 设备的 OTA URL 形如 http://host:port/xiaozhi/ota/
     app.router.add_route("*", "/xiaozhi/ota/", _handle_ota)
     app.router.add_route("*", "/xiaozhi/ota", _handle_ota)
@@ -153,6 +159,8 @@ def build_app() -> web.Application:
         app.router.add_get("/english-test/", _handle_english_test)
         app.router.add_get("/english", _handle_english)
         app.router.add_get("/english/", _handle_english)
+        app.router.add_get("/admin", _handle_admin)
+        app.router.add_get("/admin/", _handle_admin)
         app.router.add_get("/speak", _handle_speak_redirect)
         app.router.add_get("/speak/", _handle_speak_redirect)
         app.router.add_static("/static", WEB_DIR / "static", show_index=False)
@@ -187,6 +195,10 @@ async def start_ota_server(*, ssl_context=None):
         if config.ENGLISH_ENABLED:
             logger.info("SpeakPal 用户页: %s", config.english_web_url)
             logger.info("SpeakPal 短链: %s", config.english_web_url.replace("/english/", "/speak/"))
+        logger.info(
+            "小智后台: https://%s:%d/admin/",
+            config.PUBLIC_HOST, config.HTTPS_PORT if ssl_context else config.OTA_PORT,
+        )
     logger.info("请把设备 OTA URL 设置为: http://%s:%d/xiaozhi/ota/", config.PUBLIC_HOST, config.OTA_PORT)
     if config.ENGLISH_ENABLED:
         logger.info(

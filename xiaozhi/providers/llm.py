@@ -16,17 +16,31 @@ class LlmError(Exception):
     """LLM 调用失败或无有效输出。"""
 
 
-def stream_chat(messages: List[Dict[str, str]], model: str) -> Iterator[str]:
+def stream_chat(
+    messages: List[Dict[str, str]],
+    model: str,
+    *,
+    enable_search: bool = False,
+    search_options: dict | None = None,
+) -> Iterator[str]:
     """流式对话。逐段 yield 增量文本（incremental）。"""
-    logger.info("[pipeline] LLM 请求开始 model=%s messages=%d", model, len(messages))
+    logger.info(
+        "[pipeline] LLM 请求开始 model=%s messages=%d search=%s",
+        model, len(messages), enable_search,
+    )
+    call_kwargs: dict = {
+        "model": model,
+        "messages": messages,
+        "result_format": "message",
+        "stream": True,
+        "incremental_output": True,
+    }
+    if enable_search:
+        call_kwargs["enable_search"] = True
+        if search_options:
+            call_kwargs["search_options"] = search_options
     try:
-        responses = Generation.call(
-            model=model,
-            messages=messages,
-            result_format="message",
-            stream=True,
-            incremental_output=True,
-        )
+        responses = Generation.call(**call_kwargs)
     except Exception as e:  # noqa: BLE001
         logger.error("[pipeline] LLM 调用失败: %s", e)
         raise LlmError(str(e)) from e

@@ -188,6 +188,39 @@ class Config:
         "ENGLISH_OMNI_WS_URL",
         "wss://dashscope.aliyuncs.com/api-ws/v1/realtime",
     )
+    # 英语：按轮路由 cheap TEXT（ASR+LLM+TTS） vs OMNI（听发音纠音）。0=始终 Omni（旧行为）
+    ENGLISH_ROUTE_ENABLED = os.getenv("ENGLISH_ROUTE_ENABLED", "1") == "1"
+    ENGLISH_DEFAULT_ROUTE = os.getenv("ENGLISH_DEFAULT_ROUTE", "text").lower()
+    ENGLISH_ROUTER_LLM = os.getenv("ENGLISH_ROUTER_LLM", "0") == "1"
+    ENGLISH_ROUTER_LLM_MODEL = os.getenv("ENGLISH_ROUTER_LLM_MODEL", LLM_MODEL)
+    ENGLISH_TEXT_LLM_MODEL = os.getenv("ENGLISH_TEXT_LLM_MODEL", "").strip() or LLM_MODEL
+    ENGLISH_TEXT_TTS_MODEL = os.getenv("ENGLISH_TEXT_TTS_MODEL", "").strip() or TTS_MODEL
+    ENGLISH_TEXT_TTS_VOICE = os.getenv("ENGLISH_TEXT_TTS_VOICE", "").strip() or TTS_VOICE
+    # OMNI 轮结束后 N 秒内短句跟读仍走 Omni
+    ENGLISH_OMNI_STICKY_SEC = float(os.getenv("ENGLISH_OMNI_STICKY_SEC", "45"))
+    # TEXT 轮（LLM+TTS）首包优化：更短 lead、更小预缓冲、更早分句
+    ENGLISH_TEXT_TTS_START_LEAD_SEC = float(
+        os.getenv("ENGLISH_TEXT_TTS_START_LEAD_SEC", "0.12")
+    )
+    ENGLISH_TEXT_DOWNLINK_PREBUFFER_FRAMES = int(
+        os.getenv("ENGLISH_TEXT_DOWNLINK_PREBUFFER_FRAMES", "2")
+    )
+    ENGLISH_TEXT_DOWNLINK_BURST_FRAMES = int(
+        os.getenv("ENGLISH_TEXT_DOWNLINK_BURST_FRAMES", "8")
+    )
+    ENGLISH_TEXT_TTS_SPLIT_MIN_CHARS = int(
+        os.getenv("ENGLISH_TEXT_TTS_SPLIT_MIN_CHARS", "6")
+    )
+    # 路由聆听：ASR 判句结束后，再等多久无新句则送 LLM（避免只靠 VAD 静音，噪声下永远不收尾）
+    ENGLISH_ASR_UTTERANCE_GAP_SEC = float(
+        os.getenv("ENGLISH_ASR_UTTERANCE_GAP_SEC", "1.0")
+    )
+    # TEXT 轮联网搜索（日期/新闻/天气等）；命中 search 路由或显式开启时生效
+    ENGLISH_TEXT_ENABLE_SEARCH = os.getenv("ENGLISH_TEXT_ENABLE_SEARCH", "1") == "1"
+    ENGLISH_TEXT_SEARCH_STRATEGY = os.getenv("ENGLISH_TEXT_SEARCH_STRATEGY", "turbo")
+    # Omni Realtime 联网（纯 Omni / OMNI 回放）；策略需为 agent（百炼要求）
+    ENGLISH_OMNI_ENABLE_SEARCH = os.getenv("ENGLISH_OMNI_ENABLE_SEARCH", "1") == "1"
+    ENGLISH_OMNI_SEARCH_STRATEGY = os.getenv("ENGLISH_OMNI_SEARCH_STRATEGY", "agent")
     # 英语用户画像（自然语言段落，按 device_id 存 MySQL）
     ENGLISH_PROFILE_AUTO_UPDATE = os.getenv("ENGLISH_PROFILE_AUTO_UPDATE", "1") == "1"
     ENGLISH_PROFILE_UPDATE_COOLDOWN_SEC = float(
@@ -223,6 +256,9 @@ class Config:
     SMS_TEMPLATE_CODE = os.getenv("SMS_TEMPLATE_CODE", "SMS_495955218")
     # 开发时可设 AUTH_SMS_DEBUG=1，短信失败仍返回成功并把验证码打日志
     AUTH_SMS_DEBUG = os.getenv("AUTH_SMS_DEBUG", "0") == "1"
+
+    # 小智后台 API 鉴权（/admin/ 配置页）。请在 .env 中设置强随机字符串。
+    ADMIN_TOKEN = os.getenv("ADMIN_TOKEN", "").strip()
 
     @property
     def english_ws_url_for_device(self) -> str:

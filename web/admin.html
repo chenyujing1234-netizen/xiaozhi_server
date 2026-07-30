@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>小智后台 · 运行时配置</title>
+  <link rel="stylesheet" href="/static/admin.css?v=20260730a">
+</head>
+<body>
+  <div class="admin-app">
+    <header class="admin-header">
+      <div>
+        <h1>小智后台</h1>
+        <p class="subtitle">运行时配置 · 保存后立即生效</p>
+      </div>
+      <div class="header-actions">
+        <a class="link-back" href="/">返回官网</a>
+        <span class="save-status" id="save-status"></span>
+        <button type="button" class="btn btn-primary" id="btn-save" disabled>保存配置</button>
+      </div>
+    </header>
+
+    <section class="auth-panel" id="auth-panel">
+      <h2>管理员验证</h2>
+      <p>请输入服务端 <code>ADMIN_TOKEN</code>（在 .env 中配置）。</p>
+      <div class="auth-row">
+        <input type="password" id="admin-token" placeholder="ADMIN_TOKEN" autocomplete="off">
+        <button type="button" class="btn btn-primary" id="btn-login">进入后台</button>
+      </div>
+      <p class="hint" id="auth-hint"></p>
+    </section>
+
+    <main class="admin-main hidden" id="admin-main">
+      <div class="info-bar" id="info-bar"></div>
+      <div id="config-sections"></div>
+    </main>
+  </div>
+  <script src="/static/admin.js?v=20260730a"></script>
+</body>
+</html>
