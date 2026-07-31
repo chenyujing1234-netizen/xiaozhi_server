@@ -181,6 +181,9 @@ class Config:
         "When they describe the photo, help with vocabulary and correct key mistakes. "
         "When spelling a word letter by letter, use spaces or commas between letters, "
         "never hyphens (not w-i-n-d-o-w-s). Then say the whole word once. "
+        "When answering student questions, adapt your teaching: give direct answers when "
+        "needed, use hints and short guiding questions when they should be able to figure "
+        "it out, and offer short quizzes when their level and the moment fit. "
         "Keep replies natural for voice. Do not use markdown, bullet points, or emoji.",
     )
     # Omni Realtime WebSocket（国内默认 endpoint）
@@ -235,6 +238,13 @@ class Config:
     ENGLISH_HISTORY_ENABLED = os.getenv("ENGLISH_HISTORY_ENABLED", "1") == "1"
     ENGLISH_HISTORY_MAX_MESSAGES = int(os.getenv("ENGLISH_HISTORY_MAX_MESSAGES", "20"))
     ENGLISH_HISTORY_MAX_CHARS = int(os.getenv("ENGLISH_HISTORY_MAX_CHARS", "2500"))
+    # Web 页进入时拉取展示的历史条数上限（可与注入 Omni 的条数不同）
+    ENGLISH_HISTORY_UI_MAX_MESSAGES = int(
+        os.getenv("ENGLISH_HISTORY_UI_MAX_MESSAGES", "50")
+    )
+    ENGLISH_HISTORY_IMAGE_DIR = os.getenv(
+        "ENGLISH_HISTORY_IMAGE_DIR", "data/english_chat_images"
+    )
 
     # ---- MySQL（英语用户画像等共享数据）----
     MYSQL_HOST = os.getenv("MYSQL_HOST", "114.55.254.123")

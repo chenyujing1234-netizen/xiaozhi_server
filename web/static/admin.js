@@ -74,8 +74,19 @@
 
   function renderSections() {
     el.sections.innerHTML = "";
-    var byGroup = {};
+    var nestedByParent = {};
+    var topLevel = [];
     schema.forEach(function (item) {
+      if (item.nested_under) {
+        if (!nestedByParent[item.nested_under]) nestedByParent[item.nested_under] = [];
+        nestedByParent[item.nested_under].push(item);
+        return;
+      }
+      topLevel.push(item);
+    });
+
+    var byGroup = {};
+    topLevel.forEach(function (item) {
       var g = item.group || "other";
       if (!byGroup[g]) byGroup[g] = [];
       byGroup[g].push(item);
@@ -92,18 +103,20 @@
       var fields = section.querySelector(".fields");
 
       byGroup[groupKey].forEach(function (item) {
-        fields.appendChild(buildField(item));
+        var nested = nestedByParent[item.key] || [];
+        fields.appendChild(buildField(item, nested));
       });
       el.sections.appendChild(section);
     });
     refreshFieldVisibility();
   }
 
-  function buildField(item) {
+  function buildField(item, nestedItems) {
+    nestedItems = nestedItems || [];
     var wrap = document.createElement("div");
     wrap.className = "field";
     wrap.dataset.key = item.key;
-    if (!fieldVisible(item)) wrap.classList.add("disabled");
+    if (!fieldVisible(item)) wrap.classList.add("hidden");
 
     var label = document.createElement("div");
     label.className = "field-label";
@@ -127,12 +140,51 @@
     } else {
       wrap.appendChild(buildTextField(item));
     }
+
+    if (nestedItems.length) {
+      var subWrap = document.createElement("div");
+      subWrap.className = "field-nested";
+      nestedItems.forEach(function (sub) {
+        subWrap.appendChild(buildNestedField(sub));
+      });
+      wrap.appendChild(subWrap);
+    }
     return wrap;
   }
 
-  function buildEnumField(item) {
+  function buildNestedField(item) {
+    var wrap = document.createElement("div");
+    wrap.className = "field-sub";
+    wrap.dataset.key = item.key;
+    if (!fieldVisible(item)) wrap.classList.add("hidden");
+
+    if (item.label) {
+      var label = document.createElement("div");
+      label.className = "field-sub-label";
+      label.textContent = item.label;
+      wrap.appendChild(label);
+    }
+    if (item.description) {
+      var desc = document.createElement("div");
+      desc.className = "field-desc";
+      desc.textContent = item.description;
+      wrap.appendChild(desc);
+    }
+    if (item.type === "enum") {
+      wrap.appendChild(buildEnumField(item, "sub"));
+    } else if (item.type === "bool") {
+      wrap.appendChild(buildBoolField(item));
+    } else if (item.type === "float") {
+      wrap.appendChild(buildNumberField(item));
+    } else {
+      wrap.appendChild(buildTextField(item));
+    }
+    return wrap;
+  }
+
+  function buildEnumField(item, variant) {
     var box = document.createElement("div");
-    box.className = "field-options";
+    box.className = "field-options" + (variant === "sub" ? " field-options-sub" : "");
     (item.options || []).forEach(function (opt) {
       var row = document.createElement("label");
       row.className = "option-row" + (values[item.key] === opt.value ? " selected" : "");
@@ -195,10 +247,11 @@
 
   function refreshFieldVisibility() {
     schema.forEach(function (item) {
-      var node = el.sections.querySelector('.field[data-key="' + item.key + '"]');
-      if (!node) return;
-      if (fieldVisible(item)) node.classList.remove("disabled");
-      else node.classList.add("disabled");
+      var nodes = el.sections.querySelectorAll('.field[data-key="' + item.key + '"], .field-sub[data-key="' + item.key + '"]');
+      nodes.forEach(function (node) {
+        if (fieldVisible(item)) node.classList.remove("hidden");
+        else node.classList.add("hidden");
+      });
     });
   }
 

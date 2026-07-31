@@ -960,6 +960,20 @@ class EnglishSession:
             "[english][%s] 已保存待注入图片 raw=%dB b64=%d",
             self.session_id, len(raw), len(data),
         )
+        try:
+            await self.loop.run_in_executor(
+                None,
+                lambda: get_history_store().append_image(
+                    self.device_id,
+                    raw,
+                    session_id=self.session_id,
+                ),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[english][%s] 持久化图片到历史失败: %s",
+                self.session_id, e,
+            )
         await self._send_json({
             "type": "image_ack",
             "ok": True,

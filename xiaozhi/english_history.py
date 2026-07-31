@@ -2,9 +2,12 @@
 from __future__ import annotations
 
 import logging
+import re
 import threading
 import time
+import uuid
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Optional
 
 import pymysql
@@ -17,15 +20,22 @@ logger = logging.getLogger("english.history")
 
 @dataclass
 class ChatMessage:
-    role: str  # user | assistant
-    content: str
+    id: int = 0
+    role: str = ""  # user | assistant | image
+    content: str = ""
     session_id: str = ""
     created_at: float = 0.0
+
+
+def _safe_device_key(device_id: str) -> str:
+    key = (device_id or "unknown").strip() or "unknown"
+    return re.sub(r"[^\w\-]+", "_", key)[:96]
 
 
 class HistoryStore:
     def __init__(self):
         self._lock = threading.Lock()
+        self._image_root = Path(config.ENGLISH_HISTORY_IMAGE_DIR)
         self._init_db()
 
     def _connect(self):
@@ -64,6 +74,7 @@ class HistoryStore:
                         """
                     )
                 conn.commit()
+                self._image_root.mkdir(parents=True, exist_ok=True)
                 logger.info("[english.history] MySQL 表 english_chat_messages 就绪")
             finally:
                 conn.close()
@@ -115,6 +126,86 @@ class HistoryStore:
                 device_id, "assistant", assistant_text, session_id=session_id
             )
 
+    def append_image(
+        self,
+        device_id: str,
+        jpeg_bytes: bytes,
+        *,
+        session_id: str = "",
+    ) -> Optional[int]:
+        """持久化用户上传的 JPEG，供历史页回放。"""
+        if not jpeg_bytes or len(jpeg_bytes) < 100:
+            return None
+        key = (device_id or "unknown").strip() or "unknown"
+        safe = _safe_device_key(key)
+        name = f"{int(time.time() * 1000)}_{uuid.uuid4().hex[:10]}.jpg"
+        rel = f"{safe}/{name}"
+        path = self._image_root / rel
+        now = time.time()
+        msg_id: Optional[int] = None
+        with self._lock:
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(jpeg_bytes)
+            conn = self._connect()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO english_chat_messages
+                            (device_id, role, content, session_id, created_at)
+                        VALUES (%s, %s, %s, %s, %s)
+                        """,
+                        (key, "image", rel, session_id or "", now),
+                    )
+                    msg_id = int(cur.lastrowid or 0) or None
+                conn.commit()
+            except Exception:
+                conn.rollback()
+                try:
+                    path.unlink(missing_ok=True)
+                except OSError:
+                    pass
+                raise
+            finally:
+                conn.close()
+        logger.info(
+            "[english.history] 已保存图片 device=%s id=%s bytes=%d",
+            key, msg_id, len(jpeg_bytes),
+        )
+        return msg_id
+
+    def get_image_bytes(self, device_id: str, message_id: int) -> Optional[bytes]:
+        key = (device_id or "unknown").strip() or "unknown"
+        mid = int(message_id)
+        with self._lock:
+            conn = self._connect()
+            try:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT role, content FROM english_chat_messages
+                        WHERE id = %s AND device_id = %s
+                        LIMIT 1
+                        """,
+                        (mid, key),
+                    )
+                    row = cur.fetchone()
+            finally:
+                conn.close()
+        if not row or row.get("role") != "image":
+            return None
+        rel = (row.get("content") or "").strip()
+        if not rel or ".." in rel or rel.startswith("/"):
+            return None
+        path = (self._image_root / rel).resolve()
+        try:
+            path.relative_to(self._image_root.resolve())
+        except ValueError:
+            return None
+        if not path.is_file():
+            return None
+        return path.read_bytes()
+
     def get_recent(
         self,
         device_id: str,
@@ -131,9 +222,9 @@ class HistoryStore:
                 with conn.cursor() as cur:
                     cur.execute(
                         """
-                        SELECT role, content, session_id, created_at
+                        SELECT id, role, content, session_id, created_at
                         FROM (
-                            SELECT role, content, session_id, created_at, id
+                            SELECT id, role, content, session_id, created_at
                             FROM english_chat_messages
                             WHERE device_id = %s
                             ORDER BY id DESC
@@ -148,13 +239,14 @@ class HistoryStore:
                 conn.close()
         return [
             ChatMessage(
+                id=int(r.get("id") or 0),
                 role=r["role"],
                 content=r["content"] or "",
                 session_id=r["session_id"] or "",
                 created_at=float(r["created_at"] or 0.0),
             )
             for r in rows
-            if (r.get("content") or "").strip()
+            if (r.get("content") or "").strip() or r.get("role") == "image"
         ]
 
 
@@ -181,6 +273,9 @@ def format_history_context(
     budget = max_chars or config.ENGLISH_HISTORY_MAX_CHARS
     lines: list[str] = []
     for m in messages:
+        if m.role == "image":
+            lines.append("Student: [shared a photo]")
+            continue
         label = "Student" if m.role == "user" else "Tutor"
         content = (m.content or "").strip().replace("\n", " ")
         if not content:

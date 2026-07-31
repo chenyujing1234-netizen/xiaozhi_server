@@ -143,9 +143,11 @@ def build_app() -> web.Application:
     # SpeakPal 登录（手机号 / 微信 openid）
     from xiaozhi.auth_api import setup_auth_routes
     from xiaozhi.admin_api import setup_admin_routes
+    from xiaozhi.english_history_api import setup_english_history_routes
 
     setup_auth_routes(app)
     setup_admin_routes(app)
+    setup_english_history_routes(app)
     # 设备的 OTA URL 形如 http://host:port/xiaozhi/ota/
     app.router.add_route("*", "/xiaozhi/ota/", _handle_ota)
     app.router.add_route("*", "/xiaozhi/ota", _handle_ota)

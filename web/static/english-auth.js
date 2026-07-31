@@ -97,7 +97,9 @@
   }
 
   function getDeviceId() {
-    if (state.user && state.user.device_id) return state.user.device_id;
+    if (state.user && state.user.id) {
+      return state.user.device_id || ("user-" + state.user.id);
+    }
     try {
       return localStorage.getItem(DEVICE_KEY) || "";
     } catch (e) {
@@ -337,6 +339,9 @@
       try {
         state.token = token;
         state.user = JSON.parse(userRaw);
+        if (state.user && state.user.id && !state.user.device_id) {
+          state.user.device_id = "user-" + state.user.id;
+        }
         return !!(state.user && state.user.id);
       } catch (e2) {
         clearLogin();

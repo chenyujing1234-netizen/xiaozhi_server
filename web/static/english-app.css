@@ -127,8 +127,17 @@ html, body {
 }
 
 .brand-sub {
-  font-size: 0.72rem;
-  color: var(--muted);
+  margin-top: 2px;
+  font-size: 0.95rem;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  line-height: 1.25;
+  background: linear-gradient(90deg, #60a5fa 0%, #22d3ee 55%, #a78bfa 100%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-shadow: 0 0 24px rgba(34, 211, 238, 0.25);
+  filter: drop-shadow(0 0 10px rgba(37, 99, 235, 0.35));
 }
 
 @media (max-width: 420px) {
@@ -137,7 +146,8 @@ html, body {
   }
 
   .brand-sub {
-    display: none;
+    display: block;
+    font-size: 0.82rem;
   }
 
   .brand {

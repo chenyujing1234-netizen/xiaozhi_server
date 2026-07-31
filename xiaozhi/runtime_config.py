@@ -38,6 +38,26 @@ SCHEMA: List[Dict[str, Any]] = [
         "map_key": "english_service_mode",
     },
     {
+        "key": "ENGLISH_OMNI_MODEL",
+        "type": "enum",
+        "label": "Omni 模型",
+        "description": "下次建立 Omni 连接时生效。",
+        "group": "english",
+        "options": [
+            {
+                "value": "qwen3.5-omni-flash-realtime",
+                "label": "Flash（快、省）",
+            },
+            {
+                "value": "qwen3.5-omni-plus-realtime",
+                "label": "Plus（更强）",
+            },
+        ],
+        "hot": True,
+        "when": {"english_service_mode": "omni_only"},
+        "nested_under": "english_service_mode",
+    },
+    {
         "key": "ENGLISH_DEFAULT_ROUTE",
         "type": "enum",
         "label": "路由默认路径",
@@ -80,14 +100,6 @@ SCHEMA: List[Dict[str, Any]] = [
         "max": 5,
         "hot": True,
         "when": {"english_service_mode": "router"},
-    },
-    {
-        "key": "ENGLISH_OMNI_MODEL",
-        "type": "str",
-        "label": "Omni 模型",
-        "description": "下次建立 Omni 连接时生效。",
-        "group": "english",
-        "hot": True,
     },
     {
         "key": "ENGLISH_OMNI_VOICE",

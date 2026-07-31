@@ -10,6 +10,9 @@
   var ensureSessionPromise = null;
   var readyWaiters = [];
   var controlsBound = false;
+  var spacePttActive = false;
+  var historyLoaded = false;
+  var historyLoading = false;
 
   var photoObjectUrl = null;
   var photoUploading = false;
@@ -109,6 +112,56 @@
     scrollToBottom();
   }
 
+  function loadChatHistory(force) {
+    if (!window.SpeakPalAuth || !SpeakPalAuth.isLoggedIn()) {
+      return Promise.resolve(false);
+    }
+    if (historyLoaded && !force) return Promise.resolve(true);
+    if (historyLoading) return Promise.resolve(false);
+    var token = SpeakPalAuth.getToken();
+    if (!token) return Promise.resolve(false);
+
+    historyLoading = true;
+    return fetch("/api/english/history?limit=50", {
+      method: "GET",
+      headers: { Authorization: "Bearer " + token },
+      credentials: "same-origin",
+    })
+      .then(function (res) {
+        return res.json().catch(function () { return {}; }).then(function (data) {
+          return { ok: res.ok, data: data };
+        });
+      })
+      .then(function (result) {
+        if (!result.ok || !result.data.ok) return false;
+        var messages = result.data.messages || [];
+        if (messages.length) {
+          hideWelcome();
+          return Promise.all(messages.map(function (m) {
+            if (!m) return Promise.resolve();
+            if (m.role === "image" || (m.content && String(m.content).trim())) {
+              return appendHistoryMessage(m);
+            }
+            return Promise.resolve();
+          })).then(function () {
+            currentUserMsg = null;
+            currentTutorMsg = null;
+            scrollToBottom();
+            historyLoaded = true;
+            return true;
+          });
+        }
+        historyLoaded = true;
+        return false;
+      })
+      .catch(function () {
+        return false;
+      })
+      .finally(function () {
+        historyLoading = false;
+      });
+  }
+
   function escapeHtml(s) {
     return String(s)
       .replace(/&/g, "&amp;")
@@ -135,7 +188,7 @@
       el.btnTalkHint.textContent = "开始练习需登录";
     } else if (ready) {
       el.btnTalkLabel.textContent = "按住说话";
-      el.btnTalkHint.textContent = "松开结束";
+      el.btnTalkHint.textContent = "松开结束 · 空格键";
     } else {
       el.btnTalkLabel.textContent = "连接中…";
       el.btnTalkHint.textContent = "";
@@ -185,6 +238,7 @@
       onLoggedIn: function (payload) {
         if (payload && payload.toast) showToast(payload.toast, 2200);
         updateAccountButton();
+        loadChatHistory(true);
       },
     };
   }
@@ -239,6 +293,38 @@
     wrap.appendChild(bubble);
     el.messages.appendChild(wrap);
     scrollToBottom();
+  }
+
+  function appendHistoryImage(imageUrl) {
+    if (!window.SpeakPalAuth || !SpeakPalAuth.getToken()) return Promise.resolve();
+    return fetch(imageUrl, {
+      method: "GET",
+      headers: { Authorization: "Bearer " + SpeakPalAuth.getToken() },
+      credentials: "same-origin",
+    })
+      .then(function (res) {
+        if (!res.ok) throw new Error("image load failed");
+        return res.blob();
+      })
+      .then(function (blob) {
+        addPhotoMsg(URL.createObjectURL(blob));
+      })
+      .catch(function () { /* 单张失败不影响其它历史 */ });
+  }
+
+  function appendHistoryMessage(m) {
+    if (!m) return Promise.resolve();
+    if (m.role === "image" && m.image_url) {
+      return appendHistoryImage(m.image_url);
+    }
+    appendHistoryMessageText(m.role, m.content);
+    return Promise.resolve();
+  }
+
+  function appendHistoryMessageText(role, content) {
+    var msgRole = role === "user" ? "user" : "tutor";
+    var ref = ensureMsg(msgRole, null);
+    setMsgContent(ref, content, false);
   }
 
   function showPhotoBar(dataUrl) {
@@ -357,12 +443,24 @@
     var btn = el.btnTalk;
     if (!btn) return;
 
-    function onPress(e) {
-      if (e.type === "mousedown" && e.button !== 0) return;
-      e.preventDefault();
+    function isTypingTarget(target) {
+      if (!target) return false;
+      var tag = target.tagName;
+      return tag === "INPUT" || tag === "TEXTAREA" || target.isContentEditable;
+    }
+
+    function isSpaceKey(e) {
+      return e.code === "Space";
+    }
+
+    function hasPttModifier(e) {
+      return e.altKey || e.ctrlKey || e.metaKey;
+    }
+
+    function startTalkFromUi() {
       if (!window.SpeakPalAuth || !SpeakPalAuth.isLoggedIn() || !ready || !client) {
         ensureSession().then(function (ok) {
-          if (ok) showToast("已就绪，请再次按住说话", 2200);
+          if (ok) showToast("已就绪，请再次按住说话或空格键", 2200);
         });
         return;
       }
@@ -374,19 +472,63 @@
       client.startTalk();
     }
 
+    function stopTalkFromUi() {
+      if (client && client.recording) client.stopTalk();
+    }
+
+    function onPress(e) {
+      if (e.type === "mousedown" && e.button !== 0) return;
+      if (hasPttModifier(e)) return;
+      e.preventDefault();
+      startTalkFromUi();
+    }
+
     function onRelease(e) {
       e.preventDefault();
-      if (client && client.recording) client.stopTalk();
+      stopTalkFromUi();
+    }
+
+    function onSpaceDown(e) {
+      if (!isSpaceKey(e)) return;
+      if (e.repeat) return;
+      if (hasPttModifier(e)) return;
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      // 鼠标已在按住说话时，忽略空格，避免误触结束
+      if (client && client.recording && !spacePttActive) return;
+      if (!spacePttActive) {
+        spacePttActive = true;
+        startTalkFromUi();
+      }
+    }
+
+    function onSpaceUp(e) {
+      if (!isSpaceKey(e)) return;
+      if (isTypingTarget(e.target)) return;
+      e.preventDefault();
+      if (spacePttActive) {
+        spacePttActive = false;
+        stopTalkFromUi();
+      }
     }
 
     btn.addEventListener("mousedown", onPress);
     btn.addEventListener("mouseup", onRelease);
     btn.addEventListener("mouseleave", function () {
-      if (client && client.recording) client.stopTalk();
+      if (client && client.recording && !spacePttActive) client.stopTalk();
     });
     btn.addEventListener("touchstart", onPress, { passive: false });
     btn.addEventListener("touchend", onRelease, { passive: false });
     btn.addEventListener("touchcancel", onRelease, { passive: false });
+
+    document.addEventListener("keydown", onSpaceDown);
+    document.addEventListener("keyup", onSpaceUp);
+    window.addEventListener("blur", function () {
+      if (spacePttActive) {
+        spacePttActive = false;
+        stopTalkFromUi();
+      }
+    });
   }
 
   function clearConnectTimeout() {
@@ -584,6 +726,7 @@
     if (result && result.ok) {
       showOverlay("正在连接 SpeakPal…");
       setStatus("", "连接中…");
+      loadChatHistory(false);
       initClient(result.deviceId || SpeakPalAuth.getDeviceId());
       return;
     }

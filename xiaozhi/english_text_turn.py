@@ -42,8 +42,9 @@ def build_chat_messages(
         )
     messages: List[Dict[str, str]] = [{"role": "system", "content": instructions}]
     messages[0]["content"] += (
-        "\n\nVOICE LATENCY: Begin with one short direct answer (about one sentence, "
-        "under 20 words) that addresses the question, then add detail only if needed. "
+        "\n\nVOICE LATENCY: Start with one short spoken line (under ~20 words): "
+        "either a direct answer or a guiding hint/question when the teaching strategy "
+        "calls for discovery. Then add detail only if needed. "
         "Do not open with meta phrases like (slowly) or stage directions in parentheses."
     )
     messages.append({"role": "user", "content": user_text})

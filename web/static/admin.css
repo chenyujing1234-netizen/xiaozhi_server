@@ -227,6 +227,36 @@ body {
   pointer-events: none;
 }
 
+.field-nested {
+  margin-top: 12px;
+  padding: 12px 0 0 12px;
+  border-left: 2px solid var(--accent);
+}
+
+.field-sub {
+  padding: 0 0 10px;
+}
+
+.field-sub:last-child {
+  padding-bottom: 0;
+}
+
+.field-sub-label {
+  font-size: 0.88rem;
+  font-weight: 600;
+  color: var(--muted);
+  margin-bottom: 8px;
+}
+
+.field-options-sub .option-row {
+  padding: 8px 10px;
+}
+
+.field-options-sub .option-text strong {
+  font-size: 0.9rem;
+  font-weight: 500;
+}
+
 .badge-hot {
   display: inline-block;
   font-size: 0.7rem;

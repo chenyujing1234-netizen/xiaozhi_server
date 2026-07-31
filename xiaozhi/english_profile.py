@@ -28,6 +28,8 @@ DEFAULT_PROFILE_TEXT = (
     "纠错策略：温和纠正；优先纠正会影响理解的发音、用词、时态或句子结构问题；"
     "用中文简短说明问题后，给出正确英文并清楚再读一遍；每轮最多纠正一到两个要点。"
     "默认保持简短，方便口语来回；若对方要求讲故事或详细说明，再给完整内容。"
+    "教学上：能直接答的问题就给清楚答案；若凭其现有水平能自己想出来，则先给提示引导；"
+    "在合适时机可出简短口头小测验（翻译、填空、造句等），难度贴合其掌握情况，不要每轮都考。"
 )
 
 # 用户“在提偏好/要求”的信号：命中后立刻用 LLM 重写画像段落
@@ -390,6 +392,36 @@ _CORRECTION_PROTOCOL = (
     "Never use hyphens between letters: do not write or speak forms like w-i-n-d-o-w-s."
 )
 
+_TEACHING_STRATEGY = (
+    "=== Teaching strategy (questions, hints, and quizzes) ===\n"
+    "When the student asks a question (English learning, vocabulary, grammar, usage, "
+    "or general knowledge):\n"
+    "1) Direct answer vs guided discovery — choose per turn:\n"
+    "   - Give a clear direct answer when: they explicitly ask for the answer; the "
+    "topic is new to them; they are clearly stuck after trying; or a quick factual "
+    "reply is obviously more helpful.\n"
+    "   - Prefer hints and guided thinking when: the answer is within their current "
+    "level (see student profile and recent conversation); they already know related "
+    "words or patterns; or a small nudge would help them remember or produce English "
+    "themselves. Offer one short hint or guiding question first; wait for their try "
+    "if the conversation flow allows. If they are close, praise and nudge; if still "
+    "stuck after one hint, give the answer kindly.\n"
+    "2) Follow the student profile for pace, language mix, and depth. Beginners get "
+    "shorter hints and more Chinese support; stronger students get more English-only "
+    "scaffolding.\n"
+    "3) Quizzes and mini-practice — use judgment, not every turn:\n"
+    "   - After teaching a word, phrase, or grammar point, or when practice would "
+    "help consolidation, you may give ONE short oral quiz: translate a phrase, "
+    "fill in a word, repeat a sentence, or make a sentence with a new word.\n"
+    "   - Match quiz difficulty to their mastery in the profile and recent chat. "
+    "   - If they answer well, brief praise; optional slightly harder follow-up.\n"
+    "   - If they struggle, hint before revealing; do not pile on multiple quizzes.\n"
+    "   - Skip quizzing if they seem tired, confused, or asked an urgent unrelated "
+    "question.\n"
+    "4) Stay warm and helpful. Guided discovery is for teachable moments — do not "
+    "withhold answers to frustrate, and do not quiz when it breaks the flow."
+)
+
 # 导师字幕里常见的「逐字母拼读」连字符（不影响 twenty-one 等整词连字符）
 _SPELLING_HYPHEN_TOKEN = re.compile(r"\b(?:[A-Za-z]-)+[A-Za-z]\b")
 
@@ -418,6 +450,8 @@ def build_instructions(
         config.ENGLISH_OMNI_INSTRUCTIONS.strip(),
         "",
         _CORRECTION_PROTOCOL,
+        "",
+        _TEACHING_STRATEGY,
         "",
         "=== Student profile (follow closely; this is the adaptation source of truth) ===",
         p.profile_text,
@@ -493,7 +527,9 @@ def _llm_refine_profile_text(
         "画像必须是一段连贯的中文说明（可夹少量英文术语），需覆盖："
         "1) 听力/水平；2) 回复语言（全英/中英/先中后英）；"
         "3) 回复长短；4) 纠错强度与方式（严格/温和/少纠；是否用中文纠错；"
-        "是否要求正确英文再读一遍）；5) 兴趣话题与其他稳定偏好。"
+        "是否要求正确英文再读一遍）；5) 兴趣话题与其他稳定偏好；"
+        "6) 掌握程度与教学节奏（何时直接给答案、何时用提示引导其自己思考；"
+        "是否适合出题、测验难度偏好）。"
         "若用户明确要求严格纠正、少纠正、别纠正、只纠发音/语法等，必须写进画像。"
         "不要写成选项枚举，不要用 bullet。控制在 80-240 个汉字。"
         "保留仍然成立的旧偏好，吸收新证据；证据不足时保持不变。"
