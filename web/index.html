@@ -4,8 +4,8 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>语伴 LinkPal — 开源 ESP32 语音学伴</title>
-  <meta name="description" content="语伴 LinkPal 是一款开源语音学伴硬件：中文聊小智，英语练口语 SpeakPal，服务端可自建、智能体可换。">
-  <link rel="stylesheet" href="/static/style.css">
+  <meta name="description" content="SpeakPal 英语口语陪练：按住开口练、温柔纠错、拍图说英语。语伴 LinkPal 开源 ESP32 语音学伴，中文小智 + 英语 SpeakPal。">
+  <link rel="stylesheet" href="/static/style.css?v=20260801a">
 </head>
 <body>
 
@@ -16,12 +16,13 @@
       语伴 LinkPal
     </a>
     <ul class="nav-links">
+      <li><a href="#speakpal">SpeakPal 英语</a></li>
       <li><a href="#features">功能</a></li>
       <li><a href="#modes">智能体</a></li>
       <li><a href="#opensource">开源</a></li>
       <li><a href="#hardware">硬件清单</a></li>
       <li><a href="#start">快速上手</a></li>
-      <li><a href="https://linkpal.cloud/english/" target="_blank" rel="noopener noreferrer">SpeakPal 口语练习（网页版）</a></li>
+      <li><a href="/english/">SpeakPal 口语练习（网页版）</a></li>
       <li><a class="nav-cta" href="https://github.com/chenyujing1234-netizen/xiaozhi_server" target="_blank" rel="noopener">GitHub 服务端</a></li>
     </ul>
   </div>
@@ -39,8 +40,9 @@
       <p class="hero-slogan">开口说，有人陪。</p>
       <p class="hero-sub">中文聊小智，英语练口语。服务端可自建，智能体可换，硬件可复刻。</p>
       <div class="hero-actions">
-        <a class="btn btn-primary" href="#hardware">查看硬件清单</a>
-        <a class="btn btn-outline" href="#opensource">获取开源代码</a>
+        <a class="btn btn-primary" href="/english/">免费体验 SpeakPal 口语</a>
+        <a class="btn btn-outline" href="#speakpal">了解六大特色</a>
+        <a class="btn btn-outline" href="#hardware">查看硬件清单</a>
       </div>
     </div>
     <div>
@@ -48,6 +50,87 @@
     </div>
   </div>
 </header>
+
+<section id="speakpal" class="speakpal-section">
+  <div class="container">
+    <span class="section-label">SpeakPal 英语口语</span>
+    <h2 class="section-title">不是刷题 App，是敢开口的 AI 口语陪练</h2>
+    <p class="section-desc">专为中国孩子设计：按住说话就能练，听真实口语、温柔纠错、拍图说生活英语。网页版免安装，手机微信即可体验；也可配合 LinkPal 硬件脱屏练习。</p>
+
+    <div class="speakpal-hero-card">
+      <div class="speakpal-hero-text">
+        <p class="speakpal-tagline">开口说，有人陪 —— 听我说，你也开口说</p>
+        <p>很多孩子会认会读，一开口就卡。SpeakPal 把练习重心放在<strong>听 + 说</strong>：像有个有耐心的小语伴，听孩子说话、轻轻纠错、带着跟读。</p>
+        <a class="btn btn-primary speakpal-cta" href="/english/">立即体验 SpeakPal →</a>
+      </div>
+      <div class="speakpal-pills">
+        <span class="speakpal-pill">🎙 按住说话</span>
+        <span class="speakpal-pill">🔊 听+说优先</span>
+        <span class="speakpal-pill">📷 拍图练</span>
+        <span class="speakpal-pill">👀 护眼设计</span>
+      </div>
+    </div>
+
+    <div class="speakpal-grid">
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">🗣️</div>
+        <h3>真正开口练</h3>
+        <p>按住按钮或空格键即可说，弱化盯字、强化听觉，减少「只看不练」的哑巴英语。</p>
+      </div>
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">🌟</div>
+        <h3>温柔纠错</h3>
+        <p>听真实口语而非只看文字。中文简短说明 → 清晰读出正确英文 → 邀请跟读，每轮最多纠正一两个要点。</p>
+      </div>
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">🧠</div>
+        <h3>懂你、会教</h3>
+        <p>记住孩子的学习画像：该直接答就答，该提示就引导思考，合适时出小测验巩固，不会每句都考。</p>
+      </div>
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">📷</div>
+        <h3>拍图练生活英语</h3>
+        <p>拍照片描述玩具、宠物、日常场景，把英语从课本拉到真实生活；登录后对话与图片可接着练。</p>
+      </div>
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">🎯</div>
+        <h3>专业纠音能力</h3>
+        <p>多模态语音模型直连听与说；智能路由在日常聊天与发音纠音间自动分流，该精则精、该省则省。</p>
+      </div>
+      <div class="speakpal-card">
+        <div class="speakpal-card-icon">👀</div>
+        <h3>儿童友好体验</h3>
+        <p>暖色护眼界面、偏大字号；导师说太长可随时打断，练习节奏由孩子掌握，保护表达意愿。</p>
+      </div>
+    </div>
+
+    <div class="speakpal-compare">
+      <h3>和普通英语 App 有什么不同？</h3>
+      <div class="compare-grid">
+        <div class="compare-col compare-other">
+          <h4>常见产品</h4>
+          <ul>
+            <li>偏重单词、语法、选择题</li>
+            <li>对错一目了然，很少跟读</li>
+            <li>固定课程、固定难度</li>
+            <li>孩子不敢开口</li>
+          </ul>
+        </div>
+        <div class="compare-col compare-us">
+          <h4>SpeakPal</h4>
+          <ul>
+            <li>偏重<strong>开口说</strong></li>
+            <li><strong>中文点拨 + 英文示范 + 跟读</strong></li>
+            <li><strong>画像记忆 + 引导/直答/小测</strong></li>
+            <li><strong>按住就说，低门槛高频率</strong></li>
+          </ul>
+        </div>
+      </div>
+      <p class="speakpal-footer-note">适合：有一定基础但口语弱、不敢开口；希望在真实场景里把英语<strong>说出来</strong>的孩子。</p>
+      <a class="btn btn-primary speakpal-cta" href="/english/">带孩子试 5 分钟 →</a>
+    </div>
+  </div>
+</section>
 
 <section id="features">
   <div class="container">
@@ -63,7 +146,8 @@
       <div class="feature-card">
         <div class="feature-icon orange">🗣️</div>
         <h3>口语伴 SpeakPal</h3>
-        <p>英语模式采用百炼 Omni Realtime 端到端语音，听你说、直接纠正，不是 ASR→翻译→TTS 流水线。</p>
+        <p>按住开口练、温柔纠错、拍图说生活英语。网页版免安装，也可配合硬件脱屏练口语。</p>
+        <p style="margin-top:12px;"><a href="/english/">免费体验 →</a></p>
       </div>
       <div class="feature-card">
         <div class="feature-icon green">🔓</div>
@@ -118,13 +202,14 @@
           <span class="mode-tag english">MQTT 1884 · UDP 8003</span>
         </div>
         <div class="mode-body">
-          <p>英语口语纠正：音频直接进 Omni Realtime，音频直接出，低延迟、自然对话感。</p>
+          <p>专为儿童口语设计：音频直连多模态语音模型，听你说、纠正发音与语法，引导跟读。</p>
           <ul>
-            <li>引导式学习，纠正发音与语法</li>
-            <li>独立端口，不影响小智通道</li>
-            <li>静音超时自动结束会话</li>
+            <li>按住说话 · 听+说优先，弱化盯字</li>
+            <li>温柔纠错：中文点拨 → 英文示范 → 跟读</li>
+            <li>拍图练生活英语 · 记住孩子水平</li>
+            <li>网页版：<a href="/english/">/english/</a> 微信即可体验</li>
           </ul>
-          <p style="margin-top:16px;font-size:0.88rem;">SpeakPal 口语练习（网页版）：<br><code id="web-english">https://linkpal.cloud/english/</code></p>
+          <p style="margin-top:16px;font-size:0.88rem;">SpeakPal 口语练习（网页版）：<br><code id="web-english">/english/</code></p>
           <p style="margin-top:8px;font-size:0.88rem;">OTA 地址：<br><code id="ota-english">http://YOUR_HOST:8002/xiaozhi/ota/english/</code></p>
         </div>
       </div>
@@ -396,6 +481,7 @@
         <h5>联系我们</h5>
         <ul>
           <li>硬件套件：<a href="https://www.xinlucity.com/?s=resourcedetail/index/id/61.html" target="_blank" rel="noopener">芯路city</a></li>
+          <li><a href="/english/">SpeakPal 口语练习</a></li>
           <li>本页由 LinkPal 服务端托管</li>
           <li id="footer-host">服务器：—</li>
         </ul>

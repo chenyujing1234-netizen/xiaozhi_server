@@ -16,6 +16,8 @@
 
   var photoObjectUrl = null;
   var photoUploading = false;
+  var tutorTextRevealTimer = null;
+  var TUTOR_TEXT_REVEAL_DELAY_MS = 1000;
 
   var el = {
     statusDot: document.getElementById("status-dot"),
@@ -78,15 +80,111 @@
     bubble.className = "msg-bubble";
     var tag = document.createElement("span");
     tag.className = "msg-tag";
-    tag.textContent = role === "user" ? "你说" : role === "tutor" ? "导师" : "纠错";
+    tag.textContent = role === "user" ? "🗣 你说" : role === "tutor" ? "导师" : "纠错";
     var text = document.createElement("div");
     text.className = "msg-text";
-    bubble.appendChild(tag);
+    var speaker = null;
+    var listenLabel = null;
+    if (role === "tutor") {
+      var audioPanel = document.createElement("div");
+      audioPanel.className = "tutor-audio-panel";
+      speaker = document.createElement("span");
+      speaker.className = "msg-speaker";
+      speaker.setAttribute("aria-label", "导师正在发音");
+      speaker.setAttribute("title", "导师正在发音");
+      speaker.innerHTML =
+        '<svg class="msg-speaker-icon" viewBox="0 0 24 24" aria-hidden="true">' +
+        '<path d="M11 5L6 9H3v6h3l5 4V5z" fill="currentColor"/>' +
+        '<path class="msg-speaker-wave wave-1" d="M15.5 8.5a5 5 0 010 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+        '<path class="msg-speaker-wave wave-2" d="M18 6a8.5 8.5 0 010 12" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>' +
+        "</svg>";
+      listenLabel = document.createElement("span");
+      listenLabel.className = "tutor-listen-label";
+      listenLabel.textContent = "听我说…";
+      audioPanel.appendChild(speaker);
+      audioPanel.appendChild(listenLabel);
+      bubble.appendChild(audioPanel);
+      var textPlaceholder = document.createElement("div");
+      textPlaceholder.className = "tutor-text-placeholder hidden";
+      textPlaceholder.setAttribute("aria-hidden", "true");
+      textPlaceholder.textContent = "文字稍后显示…";
+      bubble.appendChild(textPlaceholder);
+      text.classList.add("msg-text-oral", "msg-text-held");
+    } else {
+      bubble.appendChild(tag);
+      if (role === "user") {
+        text.classList.add("msg-text-oral");
+      }
+    }
     bubble.appendChild(text);
     wrap.appendChild(bubble);
     el.messages.appendChild(wrap);
     scrollToBottom();
-    return { el: wrap, bubble: bubble, text: text, partial: false };
+    return {
+      el: wrap,
+      bubble: bubble,
+      text: text,
+      speaker: speaker,
+      listenLabel: listenLabel,
+      textPlaceholder: role === "tutor" ? textPlaceholder : null,
+      textRevealed: role !== "tutor",
+      partial: false,
+    };
+  }
+
+  function clearTutorTextRevealTimer() {
+    if (tutorTextRevealTimer) {
+      clearTimeout(tutorTextRevealTimer);
+      tutorTextRevealTimer = null;
+    }
+  }
+
+  function revealTutorText(ref) {
+    if (!ref || !ref.el || !ref.el.isConnected) return;
+    ref.text.classList.remove("msg-text-held");
+    ref.text.classList.add("msg-text-revealed");
+    ref.textRevealed = true;
+    if (ref.textPlaceholder) {
+      ref.textPlaceholder.classList.add("hidden");
+    }
+    scrollToBottom();
+  }
+
+  function scheduleTutorTextReveal(ref, delayMs) {
+    clearTutorTextRevealTimer();
+    if (!ref) return;
+    tutorTextRevealTimer = setTimeout(function () {
+      tutorTextRevealTimer = null;
+      revealTutorText(ref);
+    }, delayMs == null ? TUTOR_TEXT_REVEAL_DELAY_MS : delayMs);
+  }
+
+  function finalizePendingTutorMsg(ref) {
+    if (!ref || ref.textRevealed) return;
+    clearTutorTextRevealTimer();
+    revealTutorText(ref);
+  }
+
+  function setTutorTextPending(ref, content, partial) {
+    if (!ref) return;
+    ref.text.textContent = content || "";
+    ref.partial = !!partial;
+    ref.el.classList.toggle("partial", !!partial);
+    ref.text.classList.add("msg-text-held");
+    ref.text.classList.remove("msg-text-revealed");
+    ref.textRevealed = false;
+    scrollToBottom();
+  }
+
+  function setTutorSpeaking(active) {
+    if (!currentTutorMsg) return;
+    if (currentTutorMsg.speaker) {
+      currentTutorMsg.speaker.classList.toggle("active", !!active);
+    }
+    currentTutorMsg.el.classList.toggle("tutor-speaking", !!active);
+    if (currentTutorMsg.bubble) {
+      currentTutorMsg.bubble.classList.toggle("tutor-audio-live", !!active);
+    }
   }
 
   function setMsgContent(ref, content, partial) {
@@ -178,11 +276,11 @@
     el.btnTalk.classList.toggle("recording", state === "recording");
     el.btnTalk.classList.toggle("speaking", state === "speaking");
     if (state === "recording") {
-      el.btnTalkLabel.textContent = "正在聆听…";
+      el.btnTalkLabel.textContent = "🎤 你说";
       el.btnTalkHint.textContent = "松开结束";
     } else if (state === "speaking") {
-      el.btnTalkLabel.textContent = "按住停止";
-      el.btnTalkHint.textContent = "打断导师回复";
+      el.btnTalkLabel.textContent = "👂 听我说";
+      el.btnTalkHint.textContent = "按住可打断";
     } else if (guest) {
       el.btnTalkLabel.textContent = "按住说话";
       el.btnTalkHint.textContent = "开始练习需登录";
@@ -325,6 +423,10 @@
     var msgRole = role === "user" ? "user" : "tutor";
     var ref = ensureMsg(msgRole, null);
     setMsgContent(ref, content, false);
+    if (msgRole === "tutor") {
+      ref.textRevealed = true;
+      ref.text.classList.remove("msg-text-held");
+    }
   }
 
   function showPhotoBar(dataUrl) {
@@ -605,6 +707,7 @@
         },
         disconnected: function () {
           ready = false;
+          clearTutorTextRevealTimer();
           currentUserMsg = null;
           currentTutorMsg = null;
           setStatus("error", "已断开，重连中…");
@@ -658,18 +761,28 @@
           }
         },
         ttsStart: function () {
+          finalizePendingTutorMsg(currentTutorMsg);
           currentTutorMsg = ensureMsg("tutor", null);
+          setTutorSpeaking(true);
           setTalkUi("speaking");
-          setStatus("busy", "导师说话中");
+          setStatus("busy", "👂 听我说");
         },
         ttsText: function (payload) {
           currentTutorMsg = ensureMsg("tutor", currentTutorMsg);
-          setMsgContent(currentTutorMsg, payload.text, payload.partial);
+          setTutorTextPending(currentTutorMsg, payload.text, payload.partial);
         },
         ttsStop: function () {
+          var finishedMsg = currentTutorMsg;
+          setTutorSpeaking(false);
           currentTutorMsg = null;
           setTalkUi("idle");
           setStatus("ready", "就绪");
+          if (finishedMsg && !finishedMsg.textRevealed) {
+            if (finishedMsg.textPlaceholder) {
+              finishedMsg.textPlaceholder.classList.remove("hidden");
+            }
+            scheduleTutorTextReveal(finishedMsg, TUTOR_TEXT_REVEAL_DELAY_MS);
+          }
         },
         correction: function (data) {
           addCorrection(data);
@@ -699,10 +812,15 @@
           showToast(msg, 3000);
         },
         goodbye: function () {
+          setTutorSpeaking(false);
+          finalizePendingTutorMsg(currentTutorMsg);
+          currentTutorMsg = null;
           setTalkUi("idle");
           setStatus("ready", "就绪");
         },
         abort: function () {
+          setTutorSpeaking(false);
+          finalizePendingTutorMsg(currentTutorMsg);
           currentTutorMsg = null;
           setTalkUi("idle");
           setStatus("ready", "就绪");
