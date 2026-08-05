@@ -18,6 +18,9 @@
   var photoUploading = false;
   var tutorTextRevealTimer = null;
   var TUTOR_TEXT_REVEAL_DELAY_MS = 1000;
+  var pttPressed = false;
+  var interruptThenTalkPending = false;
+  var interruptTipShown = false;
 
   var el = {
     statusDot: document.getElementById("status-dot"),
@@ -28,6 +31,8 @@
     btnTalk: document.getElementById("btn-talk"),
     btnTalkLabel: document.getElementById("btn-talk-label"),
     btnTalkHint: document.getElementById("btn-talk-hint"),
+    dockOralHint: document.getElementById("dock-oral-hint"),
+    interruptBanner: document.getElementById("interrupt-banner"),
     btnPhoto: document.getElementById("btn-photo"),
     photoInput: document.getElementById("photo-input"),
     photoBar: document.getElementById("photo-bar"),
@@ -80,7 +85,7 @@
     bubble.className = "msg-bubble";
     var tag = document.createElement("span");
     tag.className = "msg-tag";
-    tag.textContent = role === "user" ? "🗣 你说" : role === "tutor" ? "导师" : "纠错";
+    tag.textContent = role === "user" ? "你" : role === "tutor" ? "小语" : "小提示";
     var text = document.createElement("div");
     text.className = "msg-text";
     var speaker = null;
@@ -90,8 +95,8 @@
       audioPanel.className = "tutor-audio-panel";
       speaker = document.createElement("span");
       speaker.className = "msg-speaker";
-      speaker.setAttribute("aria-label", "导师正在发音");
-      speaker.setAttribute("title", "导师正在发音");
+      speaker.setAttribute("aria-label", "小语正在说话");
+      speaker.setAttribute("title", "小语正在说话");
       speaker.innerHTML =
         '<svg class="msg-speaker-icon" viewBox="0 0 24 24" aria-hidden="true">' +
         '<path d="M11 5L6 9H3v6h3l5 4V5z" fill="currentColor"/>' +
@@ -100,14 +105,14 @@
         "</svg>";
       listenLabel = document.createElement("span");
       listenLabel.className = "tutor-listen-label";
-      listenLabel.textContent = "听我说…";
+      listenLabel.textContent = "小语在说…";
       audioPanel.appendChild(speaker);
       audioPanel.appendChild(listenLabel);
       bubble.appendChild(audioPanel);
       var textPlaceholder = document.createElement("div");
       textPlaceholder.className = "tutor-text-placeholder hidden";
       textPlaceholder.setAttribute("aria-hidden", "true");
-      textPlaceholder.textContent = "文字稍后显示…";
+      textPlaceholder.textContent = "字稍后出来…";
       bubble.appendChild(textPlaceholder);
       text.classList.add("msg-text-oral", "msg-text-held");
     } else {
@@ -203,7 +208,7 @@
     var lines = [];
     if (data.zh_explain) lines.push(data.zh_explain);
     if (data.correct_en) lines.push("正确：" + data.correct_en);
-    bubble.innerHTML = '<span class="msg-tag">纠错要点</span><div class="msg-text">' +
+    bubble.innerHTML = '<span class="msg-tag">小提示</span><div class="msg-text">' +
       escapeHtml(lines.join("\n")) + "</div>";
     wrap.appendChild(bubble);
     el.messages.appendChild(wrap);
@@ -268,6 +273,22 @@
       .replace(/"/g, "&quot;");
   }
 
+  function showInterruptBanner(show) {
+    if (!el.interruptBanner) return;
+    el.interruptBanner.classList.toggle("hidden", !show);
+  }
+
+  function updateDockHint(state) {
+    if (!el.dockOralHint) return;
+    if (state === "speaking") {
+      el.dockOralHint.textContent = "✋ 想插话？按住大按钮就行，不用喊「你好小智」";
+    } else if (state === "recording") {
+      el.dockOralHint.textContent = "🎤 说完松开 · 空格键也行";
+    } else {
+      el.dockOralHint.textContent = "听小语说 · 按住你也说 · 空格键也行";
+    }
+  }
+
   function setTalkUi(state) {
     // idle | recording | speaking | disabled | guest
     var loggedIn = !!(window.SpeakPalAuth && SpeakPalAuth.isLoggedIn());
@@ -275,17 +296,19 @@
     var canUse = ready || guest;
     el.btnTalk.classList.toggle("recording", state === "recording");
     el.btnTalk.classList.toggle("speaking", state === "speaking");
+    showInterruptBanner(state === "speaking");
+    updateDockHint(state);
     if (state === "recording") {
       el.btnTalkLabel.textContent = "🎤 你说";
       el.btnTalkHint.textContent = "松开结束";
     } else if (state === "speaking") {
-      el.btnTalkLabel.textContent = "👂 听我说";
-      el.btnTalkHint.textContent = "按住可打断";
+      el.btnTalkLabel.textContent = "✋ 插话";
+      el.btnTalkHint.textContent = "按住就说 · 不用等说完";
     } else if (guest) {
-      el.btnTalkLabel.textContent = "按住说话";
-      el.btnTalkHint.textContent = "开始练习需登录";
+      el.btnTalkLabel.textContent = "开聊";
+      el.btnTalkHint.textContent = "登录后就能聊";
     } else if (ready) {
-      el.btnTalkLabel.textContent = "按住说话";
+      el.btnTalkLabel.textContent = "开聊";
       el.btnTalkHint.textContent = "松开结束 · 空格键";
     } else {
       el.btnTalkLabel.textContent = "连接中…";
@@ -357,13 +380,13 @@
         }
       }
       if (!client) {
-        showOverlay("正在连接 SpeakPal…");
+        showOverlay("正在连接小语…");
         setStatus("", "连接中…");
         setTalkUi("disabled");
         initClient(SpeakPalAuth.getDeviceId());
       }
       if (!ready) {
-        showOverlay("正在连接 SpeakPal…");
+        showOverlay("正在连接小语…");
         var ok = await waitUntilReady(20000);
         if (!ok) {
           showToast("连接超时，请稍后重试", 3000);
@@ -386,7 +409,7 @@
     bubble.innerHTML = '<span class="msg-tag">我的照片</span>';
     var img = document.createElement("img");
     img.src = dataUrl;
-    img.alt = "看图练英语";
+    img.alt = "给它看的图";
     bubble.appendChild(img);
     wrap.appendChild(bubble);
     el.messages.appendChild(wrap);
@@ -562,14 +585,16 @@
     function startTalkFromUi() {
       if (!window.SpeakPalAuth || !SpeakPalAuth.isLoggedIn() || !ready || !client) {
         ensureSession().then(function (ok) {
-          if (ok) showToast("已就绪，请再次按住说话或空格键", 2200);
+          if (ok) showToast("好啦，再按一次开聊", 2200);
         });
         return;
       }
       if (client.speaking) {
+        interruptThenTalkPending = true;
         client.abortPlayback();
         return;
       }
+      interruptThenTalkPending = false;
       if (client.recording) return;
       client.startTalk();
     }
@@ -582,11 +607,14 @@
       if (e.type === "mousedown" && e.button !== 0) return;
       if (hasPttModifier(e)) return;
       e.preventDefault();
+      pttPressed = true;
       startTalkFromUi();
     }
 
     function onRelease(e) {
       e.preventDefault();
+      pttPressed = false;
+      interruptThenTalkPending = false;
       stopTalkFromUi();
     }
 
@@ -600,6 +628,7 @@
       if (client && client.recording && !spacePttActive) return;
       if (!spacePttActive) {
         spacePttActive = true;
+        pttPressed = true;
         startTalkFromUi();
       }
     }
@@ -610,6 +639,8 @@
       e.preventDefault();
       if (spacePttActive) {
         spacePttActive = false;
+        pttPressed = false;
+        interruptThenTalkPending = false;
         stopTalkFromUi();
       }
     }
@@ -617,7 +648,11 @@
     btn.addEventListener("mousedown", onPress);
     btn.addEventListener("mouseup", onRelease);
     btn.addEventListener("mouseleave", function () {
-      if (client && client.recording && !spacePttActive) client.stopTalk();
+      if (client && client.recording && !spacePttActive) {
+        pttPressed = false;
+        interruptThenTalkPending = false;
+        client.stopTalk();
+      }
     });
     btn.addEventListener("touchstart", onPress, { passive: false });
     btn.addEventListener("touchend", onRelease, { passive: false });
@@ -628,6 +663,8 @@
     window.addEventListener("blur", function () {
       if (spacePttActive) {
         spacePttActive = false;
+        pttPressed = false;
+        interruptThenTalkPending = false;
         stopTalkFromUi();
       }
     });
@@ -689,21 +726,21 @@
           ready = false;
           setStatus("", "连接中…");
           setTalkUi("disabled");
-          showOverlay("正在连接 SpeakPal…");
+          showOverlay("正在连接小语…");
           armConnectTimeout();
         },
         connected: function () {
           setStatus("", "握手中…");
-          showOverlay("正在准备对话…");
+          showOverlay("正在准备开聊…");
         },
         hello: function () {
           clearConnectTimeout();
           ready = true;
           hideOverlay();
-          setStatus("ready", "就绪");
+          setStatus("ready", "可以聊啦");
           setTalkUi("idle");
           notifyReadyWaiters();
-          showToast("已连接：可拍图或按住说话练英语", 2400);
+          showToast("连上了，小语马上跟你打招呼", 2400);
         },
         disconnected: function () {
           ready = false;
@@ -717,8 +754,8 @@
         imageAck: function (obj) {
           if (obj && obj.cleared) return;
           if (obj && obj.ok) {
-            showToast(obj.message || "图片已添加，按住说话开始看图练英语", 2800);
-            setStatus("ready", "看图就绪");
+            showToast(obj.message || "图片加上了，按住说说看", 2800);
+            setStatus("ready", "可以聊啦");
           } else {
             hidePhotoBar();
             showToast((obj && obj.message) || "图片上传失败", 3200);
@@ -739,19 +776,19 @@
           currentUserMsg = null;
           currentTutorMsg = null;
           setTalkUi("recording");
-          setStatus("busy", "聆听中");
+          setStatus("busy", "小语在听…");
         },
         talkListening: function () {
           setTalkUi("recording");
         },
         talkTooShort: function () {
           setTalkUi("idle");
-          setStatus("ready", "就绪");
-          showToast("说话太短，请按住至少约 1 秒", 2600);
+          setStatus("ready", "可以聊啦");
+          showToast("说太短啦，多按住一会儿", 2600);
         },
         talkEnd: function () {
           setTalkUi("idle");
-          setStatus("busy", "等待回复…");
+          setStatus("busy", "小语想想…");
         },
         stt: function (payload) {
           currentUserMsg = ensureMsg("user", currentUserMsg);
@@ -765,7 +802,11 @@
           currentTutorMsg = ensureMsg("tutor", null);
           setTutorSpeaking(true);
           setTalkUi("speaking");
-          setStatus("busy", "👂 听我说");
+          setStatus("busy", "👂 小语在说");
+          if (!interruptTipShown) {
+            interruptTipShown = true;
+            showToast("小语在说话时，按住大按钮就能插话，不用喊「你好小智」", 3200);
+          }
         },
         ttsText: function (payload) {
           currentTutorMsg = ensureMsg("tutor", currentTutorMsg);
@@ -776,7 +817,7 @@
           setTutorSpeaking(false);
           currentTutorMsg = null;
           setTalkUi("idle");
-          setStatus("ready", "就绪");
+          setStatus("ready", "可以聊啦");
           if (finishedMsg && !finishedMsg.textRevealed) {
             if (finishedMsg.textPlaceholder) {
               finishedMsg.textPlaceholder.classList.remove("hidden");
@@ -789,9 +830,9 @@
         },
         alert: function (obj) {
           if (obj.status === "Too Short") {
-            showToast(obj.message || "请按住至少约 1 秒", 2600);
+            showToast(obj.message || "多按住一会儿再说", 2600);
             setTalkUi("idle");
-            setStatus("ready", "就绪");
+            setStatus("ready", "可以聊啦");
             return;
           }
           var msg = (obj && obj.message) || (obj && obj.status) || "提示";
@@ -816,15 +857,21 @@
           finalizePendingTutorMsg(currentTutorMsg);
           currentTutorMsg = null;
           setTalkUi("idle");
-          setStatus("ready", "就绪");
+          setStatus("ready", "可以聊啦");
         },
         abort: function () {
           setTutorSpeaking(false);
           finalizePendingTutorMsg(currentTutorMsg);
           currentTutorMsg = null;
+          if (interruptThenTalkPending && pttPressed && client && !client.recording) {
+            interruptThenTalkPending = false;
+            client.startTalk();
+            return;
+          }
+          interruptThenTalkPending = false;
           setTalkUi("idle");
-          setStatus("ready", "就绪");
-          showToast("已停止播放", 1800);
+          setStatus("ready", "可以聊啦");
+          showToast("已停啦，按住继续聊", 1800);
         },
       },
     });
@@ -842,7 +889,7 @@
     var result = await SpeakPalAuth.initAuth(authCallbacks());
     updateAccountButton();
     if (result && result.ok) {
-      showOverlay("正在连接 SpeakPal…");
+      showOverlay("正在连接小语…");
       setStatus("", "连接中…");
       loadChatHistory(false);
       initClient(result.deviceId || SpeakPalAuth.getDeviceId());

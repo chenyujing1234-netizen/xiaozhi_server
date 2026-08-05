@@ -8,8 +8,8 @@
   <meta name="format-detection" content="telephone=no">
   <meta name="theme-color" content="#f3efe6">
   <meta name="color-scheme" content="light">
-  <title>SpeakPal 英语口语 · 语伴 LinkPal</title>
-  <link rel="stylesheet" href="/static/english-app.css?v=20260801e">
+  <title>小语 · 语伴 LinkPal</title>
+  <link rel="stylesheet" href="/static/english-app.css?v=20260805c">
 </head>
 <body>
   <div class="app" id="app">
@@ -20,10 +20,10 @@
           <span class="home-logo-text">语伴 LinkPal</span>
         </a>
         <div class="brand">
-          <span class="brand-mark" aria-hidden="true">🐣</span>
+          <span class="brand-mark" aria-hidden="true">语</span>
           <div>
-            <h1>SpeakPal</h1>
-            <p class="brand-sub">听我说，你也开口说</p>
+            <h1>小语</h1>
+            <p class="brand-sub">随便聊，说着说着就会了</p>
           </div>
         </div>
       </div>
@@ -43,110 +43,124 @@
             <source media="(max-width: 767px)" srcset="/static/images/english/hero-9x16.png">
             <img
               src="/static/images/english/hero-16x9.png"
-              alt="小朋友和语伴机器人一起练英语口语"
+              alt="小朋友和语伴机器人一起聊天"
               width="640"
               height="360"
               loading="eager"
               decoding="async"
             >
           </picture>
-          <h2 class="welcome-title">听我说，你也开口说</h2>
-          <p class="welcome-tagline">用耳朵听、用嘴巴练，不用一直盯着字看</p>
+          <h2 class="welcome-title">想聊啥就聊啥</h2>
+          <p class="welcome-tagline">不用一直看字，中文答也行 · 连上后小语会先跟你打招呼</p>
         </div>
 
         <div class="feature-strip" aria-label="怎么用">
           <div class="feature-chip">
-            <span class="feature-chip-icon" aria-hidden="true">🎙️</span>
-            <span class="feature-chip-label">按住说</span>
+            <span class="feature-chip-icon" aria-hidden="true">💬</span>
+            <span class="feature-chip-label">开聊</span>
           </div>
           <div class="feature-chip">
             <span class="feature-chip-icon" aria-hidden="true">🔊</span>
-            <span class="feature-chip-label">听我说</span>
+            <span class="feature-chip-label">听它说</span>
           </div>
           <div class="feature-chip">
             <span class="feature-chip-icon" aria-hidden="true">📷</span>
-            <span class="feature-chip-label">拍图说</span>
+            <span class="feature-chip-label">给它看</span>
           </div>
           <div class="feature-chip">
             <span class="feature-chip-icon" aria-hidden="true">✋</span>
-            <span class="feature-chip-label">能打断</span>
+            <span class="feature-chip-label">随时插话</span>
           </div>
         </div>
 
-        <div class="welcome-highlights" aria-label="SpeakPal 特色">
-          <p class="welcome-highlights-label">给家长 · 六大特色</p>
-          <ul class="highlight-list">
-            <li>
-              <span class="highlight-icon" aria-hidden="true">🗣️</span>
-              <div>
-                <strong>真正开口练</strong>
-                <span>按住说话，听+说优先，减少只看不练</span>
-              </div>
-            </li>
-            <li>
-              <span class="highlight-icon" aria-hidden="true">🌟</span>
-              <div>
-                <strong>温柔纠错</strong>
-                <span>中文点拨 → 英文示范 → 跟读，每轮只纠要点</span>
-              </div>
-            </li>
-            <li>
-              <span class="highlight-icon" aria-hidden="true">🧠</span>
-              <div>
-                <strong>懂你、会教</strong>
-                <span>记住孩子水平，该直答直答，该提示引导</span>
-              </div>
-            </li>
-            <li>
-              <span class="highlight-icon" aria-hidden="true">📷</span>
-              <div>
-                <strong>拍图练生活英语</strong>
-                <span>玩具、宠物、日常物品，都能开口描述</span>
-              </div>
-            </li>
-            <li>
-              <span class="highlight-icon" aria-hidden="true">🎯</span>
-              <div>
-                <strong>专业纠音能力</strong>
-                <span>语音模型直连听与说，智能分流日常聊与纠音</span>
-              </div>
-            </li>
-            <li>
-              <span class="highlight-icon" aria-hidden="true">👀</span>
-              <div>
-                <strong>儿童友好设计</strong>
-                <span>护眼暖色界面，随时打断，节奏孩子自己掌握</span>
-              </div>
-            </li>
-          </ul>
-        </div>
+        <p class="welcome-tip" id="welcome-interrupt-tip">
+          <span class="welcome-tip-icon" aria-hidden="true">💡</span>
+          网页版<strong>不用喊「你好小智」</strong>——小语还在说？按住下面大按钮就能插话
+        </p>
+
+        <details class="parent-notes" id="parent-notes">
+          <summary class="parent-notes-toggle">给家长看 · 小语能做什么</summary>
+          <div class="parent-notes-body">
+            <ul class="highlight-list">
+              <li>
+                <span class="highlight-icon" aria-hidden="true">💬</span>
+                <div>
+                  <strong>像聊天，不像上课</strong>
+                  <span>先聊起来，英文在对话里自然出现</span>
+                </div>
+              </li>
+              <li>
+                <span class="highlight-icon" aria-hidden="true">🔊</span>
+                <div>
+                  <strong>听优先，字稍后出</strong>
+                  <span>回答时先听，说完才显示文字，减少盯屏</span>
+                </div>
+              </li>
+              <li>
+                <span class="highlight-icon" aria-hidden="true">🌟</span>
+                <div>
+                  <strong>轻轻纠错</strong>
+                  <span>前几轮几乎不纠，之后也只点关键处</span>
+                </div>
+              </li>
+              <li>
+                <span class="highlight-icon" aria-hidden="true">📷</span>
+                <div>
+                  <strong>拍图聊</strong>
+                  <span>玩具、游戏、宠物，拍给它就能聊</span>
+                </div>
+              </li>
+              <li>
+                <span class="highlight-icon" aria-hidden="true">🧠</span>
+                <div>
+                  <strong>记得住偏好</strong>
+                  <span>聊久了会更懂孩子水平和兴趣</span>
+                </div>
+              </li>
+              <li>
+                <span class="highlight-icon" aria-hidden="true">✋</span>
+                <div>
+                  <strong>随时插话</strong>
+                  <span>小语还在说？按住大按钮就能打断，网页版无需唤醒词</span>
+                </div>
+              </li>
+            </ul>
+          </div>
+        </details>
 
         <div class="welcome-cta">
           <span class="welcome-cta-mic" aria-hidden="true">🎤</span>
-          <p>按住下面大按钮，就开始练口语啦</p>
+          <p>小语会先跟你打招呼，你也可以按住下面直接开聊</p>
         </div>
       </div>
       <div id="messages"></div>
     </main>
 
     <footer class="dock">
-      <p class="dock-oral-hint" id="dock-oral-hint">👂 听小语伴 · 🎤 按住你也说 · 空格键也行</p>
+      <div class="interrupt-banner hidden" id="interrupt-banner" role="status" aria-live="polite">
+        <span class="interrupt-banner-icon" aria-hidden="true">✋</span>
+        <div class="interrupt-banner-text">
+          <strong>想插话？按住就行！</strong>
+          <span>不用等小语说完，也<strong>不用喊「你好小智」</strong>～</span>
+        </div>
+      </div>
+      <p class="dock-oral-hint" id="dock-oral-hint">听小语说 · 按住你也说 · 空格键也行</p>
       <div class="photo-bar hidden" id="photo-bar">
         <img class="photo-thumb" id="photo-thumb" alt="已选图片">
         <div class="photo-meta">
-          <span class="photo-label">📷 看图说</span>
-          <span class="photo-hint">按住说话</span>
+          <span class="photo-label">📷 给它看</span>
+          <span class="photo-hint">按住说说</span>
         </div>
         <button type="button" class="btn-photo-clear" id="btn-photo-clear" aria-label="清除图片">清除</button>
       </div>
       <div class="dock-actions">
         <button type="button" class="btn-photo" id="btn-photo" disabled aria-label="拍照或选图">
           <span class="btn-photo-icon" aria-hidden="true">📷</span>
-          <span>拍图</span>
+          <span>给它看</span>
         </button>
-        <button type="button" class="btn-talk" id="btn-talk" disabled aria-label="按住说话">
+        <button type="button" class="btn-talk" id="btn-talk" disabled aria-label="按住开聊">
           <span class="btn-talk-icon" aria-hidden="true">🎤</span>
-          <span class="btn-talk-label" id="btn-talk-label">按住说话</span>
+          <span class="btn-talk-label" id="btn-talk-label">开聊</span>
           <span class="btn-talk-hint" id="btn-talk-hint">松开结束 · 空格键</span>
         </button>
       </div>
@@ -156,7 +170,7 @@
     <div class="overlay hidden" id="overlay">
       <div class="overlay-card">
         <div class="spinner"></div>
-        <p id="overlay-text">正在连接 SpeakPal…</p>
+        <p id="overlay-text">正在连接小语…</p>
       </div>
     </div>
 
@@ -168,8 +182,8 @@
           <div class="login-logo-mark">
             <img src="/static/images/english/hero-elementary-16x9.png" alt="" width="120" height="68" decoding="async">
           </div>
-          <div class="login-logo-text">SpeakPal 小语伴</div>
-          <div class="login-slogan">登录后，听我说、你也开口说</div>
+          <div class="login-logo-text">小语</div>
+          <div class="login-slogan">登录后就能开聊啦</div>
         </div>
 
         <div id="wx-login-tip" class="wechat-login-tip hidden">
@@ -202,7 +216,7 @@
           <div class="login-error hidden" id="login-error"></div>
           <button type="button" class="login-btn" id="btn-send-code" disabled>获取验证码</button>
           <button type="button" class="login-btn hidden" id="btn-phone-login" disabled>登录</button>
-          <div class="login-agreement">登录即代表同意使用 SpeakPal 口语服务</div>
+          <div class="login-agreement">登录即代表同意使用小语聊天服务</div>
         </div>
       </div>
     </div>
@@ -212,6 +226,6 @@
 
   <script src="/static/english-core.js?v=20260728a"></script>
   <script src="/static/english-auth.js?v=20260731e"></script>
-  <script src="/static/english-app.js?v=20260801c"></script>
+  <script src="/static/english-app.js?v=20260805c"></script>
 </body>
 </html>

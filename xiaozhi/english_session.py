@@ -44,7 +44,7 @@ from .english_profile import (
     refine_profile,
 )
 from .english_router import TurnRoute, route_turn
-from .english_text_turn import run_text_turn
+from .english_text_turn import run_proactive_greeting_turn, run_text_turn
 from .providers import asr as asr_provider
 from .opus_codec import OpusDecoder, OpusEncoder
 
@@ -208,6 +208,8 @@ class EnglishSession:
         self._asr_finalize_task: Optional[asyncio.Task] = None
         self._asr_segment_parts: list[str] = []
         self._asr_stop_intentional = False
+        self._proactive_greeting_task: Optional[asyncio.Task] = None
+        self._proactive_greeting_sent = False
 
     def _cancel_asr_debounced_finalize(self):
         t = self._asr_finalize_task
@@ -870,6 +872,87 @@ class EnglishSession:
             "[english] 已回复 hello, session_id=%s web_pcm=%s",
             self.session_id, self._web_pcm_mode,
         )
+        if self._web_pcm_mode and config.ENGLISH_PROACTIVE_GREETING:
+            self._schedule_proactive_greeting()
+
+    def _schedule_proactive_greeting(self):
+        if self._proactive_greeting_sent or self._proactive_greeting_task:
+            return
+        self._proactive_greeting_task = asyncio.create_task(
+            self._maybe_proactive_greeting()
+        )
+
+    async def _maybe_proactive_greeting(self):
+        try:
+            await asyncio.sleep(0.35)
+            if self._cancel or self._speaking or self._turn_task:
+                return
+            if self._proactive_greeting_sent:
+                return
+            self._profile = get_store().get(self.device_id)
+            self._history_context = await self.loop.run_in_executor(
+                None, self._load_history_context
+            )
+            if (self._history_context or "").strip():
+                return
+            has_rows = await self.loop.run_in_executor(
+                None,
+                lambda: bool(
+                    get_history_store().get_recent(self.device_id, max_messages=1)
+                ),
+            )
+            if has_rows:
+                return
+            await self._run_proactive_greeting()
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:  # noqa: BLE001
+            logger.warning(
+                "[english][%s] 主动打招呼失败: %s", self.session_id, e
+            )
+        finally:
+            self._proactive_greeting_task = None
+
+    async def _run_proactive_greeting(self):
+        async with self._turn_lock:
+            if self._proactive_greeting_sent or self._speaking or self._turn_task:
+                return
+            self._proactive_greeting_sent = True
+            self._speaking = True
+            self._cancel = False
+            self._tts_start_sent = False
+            self._text_downlink_mode = True
+            self._turn_saved = False
+            self._last_user_text = ""
+            self._last_tutor_text = ""
+            self._turn_web_search = False
+
+        self._stop_silence_watchdog()
+        try:
+            reply = await run_proactive_greeting_turn(
+                self,
+                send_json=self._send_json,
+                play_pcm_frames=self._text_enqueue_pcm,
+                is_cancelled=lambda: self._cancel,
+            )
+            self._last_tutor_text = reply or ""
+            await self._enqueue_pcm_frames(b"", flush=True)
+            if reply.strip():
+                self._empty_turns.note_text()
+                self._schedule_history_save()
+            logger.info(
+                "[english][%s] 主动打招呼完成 reply_len=%d",
+                self.session_id,
+                len(reply or ""),
+            )
+        except Exception as e:  # noqa: BLE001
+            logger.exception(
+                "[english][%s] 主动打招呼异常: %s", self.session_id, e
+            )
+            self._proactive_greeting_sent = False
+        finally:
+            self._text_downlink_mode = False
+            await self._finish_speaking()
 
     async def _on_listen(self, msg: dict):
         state = msg.get("state")
@@ -988,9 +1071,80 @@ class EnglishSession:
 
     # ---------------- 路由聆听：ASR → 判路由 → TEXT / OMNI ----------------
 
+    @staticmethod
+    def _join_asr_segments(parts: list[str]) -> str:
+        cleaned: list[str] = []
+        for raw in parts:
+            p = (raw or "").strip()
+            if not p:
+                continue
+            if cleaned:
+                last = cleaned[-1]
+                if p == last:
+                    continue
+                if p.startswith(last):
+                    cleaned[-1] = p
+                    continue
+                if last.startswith(p):
+                    continue
+            cleaned.append(p)
+        return " ".join(cleaned) if cleaned else ""
+
+    def _asr_commit_tail_segment(self, tail: str):
+        """把已说完的一小段锁进 segments，避免长语音 partial 刷新后丢失前文。"""
+        tail = (tail or "").strip()
+        if not tail:
+            return
+        parts = self._asr_segment_parts
+        if not parts:
+            parts.append(tail)
+            return
+        last = parts[-1]
+        if tail == last:
+            return
+        if tail.startswith(last) and len(tail) > len(last):
+            parts[-1] = tail
+            return
+        if last.startswith(tail):
+            return
+        parts.append(tail)
+
+    def _compose_asr_text(self) -> str:
+        """合并 ASR 已句末分段 + 当前句内 partial，避免长语音只保留最后一段。"""
+        parts = [p.strip() for p in self._asr_segment_parts if (p or "").strip()]
+        tail = (self._last_asr_partial or "").strip()
+        if tail:
+            if not parts:
+                parts = [tail]
+            elif tail == parts[-1]:
+                pass
+            elif parts[-1] and tail.startswith(parts[-1]):
+                parts[-1] = tail
+            elif parts[-1] != tail:
+                parts.append(tail)
+        return self._join_asr_segments(parts)
+
+    async def _send_asr_partial_stt(self, text: str):
+        if not text or not self._listening or self._speaking:
+            return
+        await self._send_json({"type": "stt", "text": text, "partial": True})
+
     def _make_asr_callbacks(self):
         def on_partial(text: str):
+            prev = (self._last_asr_partial or "").strip()
+            new = (text or "").strip()
+            if prev and new and prev != new:
+                # Paraformer 新一句时 partial 常变短且与前句无前缀关系
+                if len(new) < len(prev) and not new.startswith(prev):
+                    self._asr_commit_tail_segment(prev)
+                elif not new.startswith(prev) and not prev.startswith(new):
+                    self._asr_commit_tail_segment(prev)
             self._last_asr_partial = text
+            display = self._compose_asr_text()
+            if display:
+                asyncio.run_coroutine_threadsafe(
+                    self._send_asr_partial_stt(display), self.loop
+                )
 
         def on_final(text: str):
             asyncio.run_coroutine_threadsafe(
@@ -1027,8 +1181,10 @@ class EnglishSession:
         if not text or not self._listening or self._speaking:
             return
         self._last_asr_partial = text
-        if not self._asr_segment_parts or self._asr_segment_parts[-1] != text:
-            self._asr_segment_parts.append(text)
+        self._asr_commit_tail_segment(text)
+        display = self._compose_asr_text()
+        if display:
+            await self._send_asr_partial_stt(display)
         logger.info(
             "[english][%s] ASR 句末=%r segments=%d，%.1fs 无新句则提交",
             self.session_id,
@@ -1050,9 +1206,9 @@ class EnglishSession:
             if not self._listening or self._speaking or self._utterance_finalizing:
                 return
             parts = [p for p in self._asr_segment_parts if p]
-            text = (self._last_asr_partial or "").strip()
-            if parts:
-                text = "".join(parts)
+            text = self._compose_asr_text()
+            if not text and parts:
+                text = self._join_asr_segments(parts)
             if not text:
                 return
             await self._commit_routed_utterance(text, reason="asr_gap")
@@ -1150,9 +1306,9 @@ class EnglishSession:
             if not self._vad.utterance_had_speech:
                 return
         parts = [p for p in self._asr_segment_parts if p]
-        text = (self._last_asr_partial or "").strip()
-        if parts:
-            text = "".join(parts)
+        text = self._compose_asr_text()
+        if not text and parts:
+            text = self._join_asr_segments(parts)
         await self._commit_routed_utterance(text, reason="vad_silence")
 
     async def _dispatch_routed_turn(self, user_text: str, pcm: bytes):
@@ -1312,6 +1468,9 @@ class EnglishSession:
         if self._speaking:
             logger.info("[english][%s] 仍在播放，忽略 listen start", self.session_id)
             return
+        if self._proactive_greeting_task and not self._proactive_greeting_task.done():
+            self._proactive_greeting_task.cancel()
+            self._proactive_greeting_task = None
 
         # MCU 收到 goodbye 后常立刻再 listen start；锁定期间禁止重连 Omni，避免每秒刷屏提示
         if self._cloud_fault_latched and not self._web_pcm_mode:
@@ -1463,19 +1622,27 @@ class EnglishSession:
         await asyncio.sleep(0.05)
 
         if self._use_routed_listen():
-            partial = (self._last_asr_partial or "").strip()
+            self._cancel_asr_debounced_finalize()
             pcm_snapshot = bytes(self._utterance_pcm_buf or b"")
+            tail_before_stop = (self._last_asr_partial or "").strip()
+            if tail_before_stop:
+                self._asr_commit_tail_segment(tail_before_stop)
             self._stop_asr_english()
-            await asyncio.sleep(0.25)
-            partial = (self._last_asr_partial or partial or "").strip()
+            await asyncio.sleep(0.35)
+            tail_after_stop = (self._last_asr_partial or "").strip()
+            if tail_after_stop:
+                self._asr_commit_tail_segment(tail_after_stop)
+            text = self._compose_asr_text()
             if len(pcm_snapshot) < MIN_WEB_OMNI_PCM_BYTES:
                 await self._notify_too_short()
                 return
-            if not partial:
+            if not text:
                 await self._notify_too_short()
                 return
             self._listening = False
-            await self._dispatch_routed_turn(partial, pcm_snapshot)
+            self._asr_segment_parts = []
+            self._last_asr_partial = ""
+            await self._dispatch_routed_turn(text, pcm_snapshot)
             return
 
         if self._omni is None:

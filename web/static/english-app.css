@@ -146,7 +146,9 @@ html, body {
   border-radius: 50%;
   display: grid;
   place-items: center;
-  font-size: 1.35rem;
+  font-size: 1.05rem;
+  font-weight: 800;
+  color: #4a6b62;
   background: var(--accent-cream);
   border: 1px solid rgba(160, 140, 90, 0.2);
   flex-shrink: 0;
@@ -316,6 +318,31 @@ html, body {
   line-height: 1.2;
 }
 
+.welcome-tip {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-bottom: 16px;
+  padding: 11px 12px;
+  border-radius: 12px;
+  background: #eef5f0;
+  border: 1px solid rgba(90, 154, 138, 0.2);
+  font-size: 0.86rem;
+  line-height: 1.55;
+  color: #5a6b62;
+  text-align: left;
+}
+
+.welcome-tip-icon {
+  flex-shrink: 0;
+  font-size: 1rem;
+  line-height: 1.3;
+}
+
+.welcome-tip strong {
+  color: #4a6b62;
+}
+
 .welcome-cta {
   text-align: center;
   padding: 16px 12px 10px;
@@ -344,6 +371,48 @@ html, body {
   border-radius: var(--radius-md);
   background: var(--bg-soft);
   border: 1px solid var(--border);
+}
+
+.parent-notes {
+  margin-bottom: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: var(--bg-soft);
+  overflow: hidden;
+}
+
+.parent-notes-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 12px 14px;
+  font-size: 0.82rem;
+  font-weight: 600;
+  color: var(--muted);
+  cursor: pointer;
+  list-style: none;
+  user-select: none;
+}
+
+.parent-notes-toggle::-webkit-details-marker {
+  display: none;
+}
+
+.parent-notes-toggle::after {
+  content: "▾";
+  font-size: 0.75rem;
+  color: var(--muted);
+  transition: transform 0.15s ease;
+}
+
+.parent-notes[open] .parent-notes-toggle::after {
+  transform: rotate(180deg);
+}
+
+.parent-notes-body {
+  padding: 0 10px 12px;
+  border-top: 1px solid var(--border);
 }
 
 .welcome-highlights-label {
@@ -600,6 +669,65 @@ html, body {
 }
 
 /* ---- Dock ---- */
+.interrupt-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  width: min(100%, 420px);
+  margin: 0 auto 10px;
+  padding: 11px 14px;
+  border-radius: 16px;
+  background: linear-gradient(135deg, #fff8e8 0%, #eef8f2 100%);
+  border: 1px solid rgba(196, 165, 116, 0.35);
+  box-shadow: var(--shadow-card);
+  animation: interruptPop 0.35s ease;
+}
+
+.interrupt-banner.hidden {
+  display: none;
+}
+
+.interrupt-banner-icon {
+  flex-shrink: 0;
+  width: 40px;
+  height: 40px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  font-size: 1.25rem;
+  background: rgba(90, 154, 138, 0.16);
+  animation: interruptWave 1.6s ease-in-out infinite;
+}
+
+.interrupt-banner-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 0.86rem;
+  line-height: 1.45;
+  color: var(--text-secondary);
+}
+
+.interrupt-banner-text strong {
+  color: #5a7a62;
+  font-size: 0.92rem;
+}
+
+@keyframes interruptPop {
+  from { opacity: 0; transform: translateY(6px) scale(0.98); }
+  to { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes interruptWave {
+  0%, 100% { transform: scale(1); }
+  50% { transform: scale(1.08); }
+}
+
+.btn-talk.speaking:not(:disabled) {
+  background: #c4a574;
+  box-shadow: 0 0 0 4px rgba(196, 165, 116, 0.22);
+}
+
 .dock-oral-hint {
   text-align: center;
   font-size: 0.88rem;
@@ -743,12 +871,8 @@ html, body {
   background: #5a8e7e;
 }
 
-.btn-talk.speaking:not(:disabled) {
-  background: #a89070;
-}
-
 .btn-talk.speaking:not(:disabled):active {
-  background: #927a5c;
+  background: #b08858;
 }
 
 .btn-talk-icon {

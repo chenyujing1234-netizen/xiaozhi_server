@@ -18,6 +18,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger("english.text")
 
+PROACTIVE_GREETING_LLM_USER = (
+    "[Session start: the kid has not spoken yet. "
+    "Speak first as XiaoYu (小语). One or two short spoken sentences: "
+    "friendly greeting + ONE very easy question they can answer in Chinese "
+    "or with one English word. Offer A-or-B choices when helpful. "
+    "Topics: games, food, pets, something funny today. "
+    "Do NOT mention English class, practice, studying, or being a tutor. "
+    "Example vibe: \"Hey! Quick one — pizza or noodles for lunch?\"]"
+)
+
 
 def build_chat_messages(
     session: "EnglishSession",
@@ -42,9 +52,9 @@ def build_chat_messages(
         )
     messages: List[Dict[str, str]] = [{"role": "system", "content": instructions}]
     messages[0]["content"] += (
-        "\n\nVOICE LATENCY: Start with one short spoken line (under ~20 words): "
-        "either a direct answer or a guiding hint/question when the teaching strategy "
-        "calls for discovery. Then add detail only if needed. "
+        "\n\nVOICE LATENCY: Start with one short spoken line (under ~20 words). "
+        "When the student might be shy or stuck, end with an easy question (yes/no or A/B). "
+        "Then add detail only if needed. "
         "Do not open with meta phrases like (slowly) or stage directions in parentheses."
     )
     messages.append({"role": "user", "content": user_text})
@@ -200,6 +210,24 @@ async def run_text_turn(
         session.session_id, time.time() - t0, len(reply),
     )
     return reply
+
+
+async def run_proactive_greeting_turn(
+    session: "EnglishSession",
+    *,
+    send_json: Callable[..., Awaitable[None]],
+    play_pcm_frames: Callable[[bytes], Awaitable[None]],
+    is_cancelled: Callable[[], bool],
+) -> str:
+    """新 Web 会话无历史时，小语主动开口（不落库用户侧假消息）。"""
+    return await run_text_turn(
+        session,
+        PROACTIVE_GREETING_LLM_USER,
+        send_json=send_json,
+        play_pcm_frames=play_pcm_frames,
+        is_cancelled=is_cancelled,
+        enable_search=False,
+    )
 
 
 def _run_llm(
