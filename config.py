@@ -218,6 +218,21 @@ class Config:
     ENGLISH_ASR_UTTERANCE_GAP_SEC = float(
         os.getenv("ENGLISH_ASR_UTTERANCE_GAP_SEC", "1.0")
     )
+    # 英语路由 ASR：Paraformer v2 双语提示（en+zh，不锁定单一语言）
+    ENGLISH_ASR_LANGUAGE_HINTS = [
+        h.strip()
+        for h in os.getenv("ENGLISH_ASR_LANGUAGE_HINTS", "en,zh").split(",")
+        if h.strip()
+    ]
+    # Omni 用户语音转写：language 留空=自动检测；仅在你明确只要一种语言时再设 en/zh
+    ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE = os.getenv(
+        "ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE", ""
+    ).strip()
+    # Omni 转写上下文（不锁语言，帮助中英混合场景；留空则不传）
+    ENGLISH_OMNI_TRANSCRIPTION_CORPUS = os.getenv(
+        "ENGLISH_OMNI_TRANSCRIPTION_CORPUS",
+        "Bilingual English and Mandarin conversation. The student may speak English or Chinese.",
+    ).strip()
     # TEXT 轮联网搜索（日期/新闻/天气等）；命中 search 路由或显式开启时生效
     ENGLISH_TEXT_ENABLE_SEARCH = os.getenv("ENGLISH_TEXT_ENABLE_SEARCH", "1") == "1"
     ENGLISH_TEXT_SEARCH_STRATEGY = os.getenv("ENGLISH_TEXT_SEARCH_STRATEGY", "turbo")

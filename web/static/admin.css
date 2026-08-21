@@ -291,3 +291,20 @@ body {
 }
 
 .admin-toast.hidden { display: none; }
+
+.site-beian {
+  margin: 0;
+  padding: 16px 16px 24px;
+  text-align: center;
+  font-size: 0.82rem;
+  color: var(--muted);
+}
+
+.site-beian a {
+  color: inherit;
+  text-decoration: none;
+}
+
+.site-beian a:hover {
+  text-decoration: underline;
+}

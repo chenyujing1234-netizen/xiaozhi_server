@@ -65,14 +65,18 @@ class AsrStream:
         on_final: Callable[[str], None],
         on_partial: Optional[Callable[[str], None]] = None,
         on_error: Optional[Callable[[str], None]] = None,
+        language_hints: Optional[list[str]] = None,
     ):
         self._closed = False
+        asr_kwargs: dict = {"semantic_punctuation_enabled": False}
+        if language_hints:
+            asr_kwargs["language_hints"] = language_hints
         self._recognition = Recognition(
             model=model,
             format="pcm",
             sample_rate=sample_rate,
-            semantic_punctuation_enabled=False,
             callback=_Callback(on_partial, on_final, on_error),
+            **asr_kwargs,
         )
 
     def start(self) -> None:

@@ -59,6 +59,10 @@
     return merged;
   }
 
+  function isWeChatBrowser() {
+    return /MicroMessenger/i.test(global.navigator.userAgent || "");
+  }
+
   function getOrCreateDeviceId(storageKey) {
     var key = storageKey || "speakpal_device_id";
     try {
@@ -279,8 +283,14 @@
     if (!global.isSecureContext) {
       throw new Error("请使用 HTTPS 访问本页，微信内也需安全连接才能录音");
     }
+    var wechatMic = isWeChatBrowser();
     this.captureStream = await navigator.mediaDevices.getUserMedia({
-      audio: { channelCount: 1, echoCancellation: true, noiseSuppression: true },
+      audio: {
+        channelCount: 1,
+        echoCancellation: !wechatMic,
+        noiseSuppression: !wechatMic,
+        autoGainControl: !wechatMic,
+      },
     });
     this.captureCtx = new (global.AudioContext || global.webkitAudioContext)();
     this.captureSrcRate = this.captureCtx.sampleRate;

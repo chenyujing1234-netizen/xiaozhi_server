@@ -57,10 +57,33 @@ html, body {
   text-rendering: optimizeLegibility;
 }
 
+body {
+  display: flex;
+  flex-direction: column;
+}
+
+.site-beian {
+  flex-shrink: 0;
+  margin: 0;
+  text-align: center;
+  padding: 4px 12px calc(4px + env(safe-area-inset-bottom, 0px));
+  font-size: 0.72rem;
+  color: #a8a098;
+  background: #f0ede6;
+  border-top: 1px solid var(--border);
+}
+
+.site-beian a {
+  color: inherit;
+  text-decoration: none;
+}
+
 .app {
   display: flex;
   flex-direction: column;
-  height: 100%;
+  flex: 1;
+  min-height: 0;
+  width: 100%;
   max-width: 720px;
   margin: 0 auto;
   position: relative;

@@ -242,6 +242,26 @@ class EnglishSession:
             "search_options": {"search_strategy": strategy},
         }
 
+    def _omni_session_update_kwargs(self) -> dict:
+        """Omni session.update 额外参数：联网 + 可选转写语言/双语上下文。"""
+        extra = dict(self._omni_search_session_kwargs())
+        tx: dict = {}
+        lang = (
+            rc.get_str("ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE")
+            or config.ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE
+        )
+        if lang:
+            tx["language"] = lang
+        corpus = (
+            rc.get_str("ENGLISH_OMNI_TRANSCRIPTION_CORPUS")
+            or config.ENGLISH_OMNI_TRANSCRIPTION_CORPUS
+        )
+        if corpus:
+            tx["corpus"] = {"text": corpus}
+        if tx:
+            extra["input_audio_transcription"] = tx
+        return extra
+
     # ---------------- 消息分发 ----------------
 
     async def handle_text(self, raw: str):
@@ -1260,12 +1280,14 @@ class EnglishSession:
 
     async def _start_asr_english(self):
         on_partial, on_final, on_error = self._make_asr_callbacks()
+        hints = config.ENGLISH_ASR_LANGUAGE_HINTS or None
         self._asr = asr_provider.AsrStream(
             model=config.ASR_MODEL,
             sample_rate=config.UPLINK_SAMPLE_RATE,
             on_final=on_final,
             on_partial=on_partial,
             on_error=on_error,
+            language_hints=hints,
         )
         await self.loop.run_in_executor(None, self._asr.start)
 
@@ -1744,21 +1766,28 @@ class EnglishSession:
                 enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
-                **self._omni_search_session_kwargs(),
+                **self._omni_session_update_kwargs(),
             )
 
         await self.loop.run_in_executor(None, _configure)
         self._omni = conv
         search_on = rc.get_bool("ENGLISH_OMNI_ENABLE_SEARCH")
         hist_chars = len(self._history_context or "")
+        tx_lang = (
+            rc.get_str("ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE")
+            or config.ENGLISH_OMNI_TRANSCRIPTION_LANGUAGE
+            or "auto"
+        )
         logger.info(
-            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d vad=%s search=%s text=%s",
+            "[english][%s] 画像已注入 turns=%d refine_at=%d history_chars=%d vad=%s "
+            "search=%s tx_lang=%s text=%s",
             self.session_id,
             self._profile.turn_count,
             self._profile.last_refine_turn,
             hist_chars,
             "server_vad" if use_server_vad else "manual",
             search_on,
+            tx_lang,
             (self._profile.profile_text or "")[:120],
         )
 
@@ -1780,7 +1809,7 @@ class EnglishSession:
                 enable_turn_detection=use_server_vad,
                 turn_detection_type="server_vad",
                 instructions=instructions,
-                **self._omni_search_session_kwargs(),
+                **self._omni_session_update_kwargs(),
             )
 
         try:
